@@ -1,0 +1,39 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Document Index: Build builder image",
+      "type": "process",
+      "command": "docker",
+      "args": ["buildx", "bake", "-f", "docker-bake.hcl", "--load", "builder"],
+      "options": {"cwd": "${workspaceFolder}"},
+      "problemMatcher": []
+    },
+    {
+      "label": "Document Index: Inspect PDF",
+      "type": "process",
+      "command": "${workspaceFolder}/scripts/inspect-pdf",
+      "args": ["${input:pdf}", "${input:inspectionConfig}", "${input:source}", "${input:inspectionOutput}"],
+      "options": {"cwd": "${workspaceFolder}"},
+      "problemMatcher": []
+    },
+    {
+      "label": "Document Index: Build knowledge release",
+      "type": "process",
+      "command": "${workspaceFolder}/scripts/build-knowledge",
+      "args": ["${input:buildConfig}", "${input:inputs}", "${input:releaseOutput}", "${input:signingKey}"],
+      "options": {"cwd": "${workspaceFolder}"},
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {"id": "pdf", "type": "promptString", "description": "Path to one authorized PDF"},
+    {"id": "inspectionConfig", "type": "promptString", "description": "Inspection configuration with this PDF's hash and rights classification", "default": ".local/inspection-config.json"},
+    {"id": "source", "type": "pickString", "description": "Registered source", "options": ["baua", "dguv", "eur-lex"], "default": "baua"},
+    {"id": "inspectionOutput", "type": "promptString", "description": "Fresh inspection output directory", "default": ".local/inspection/example"},
+    {"id": "buildConfig", "type": "promptString", "description": "Build configuration (directories use /inputs inside the container)", "default": "builds/example.json"},
+    {"id": "inputs", "type": "promptString", "description": "Authorized source directory to mount at /inputs"},
+    {"id": "releaseOutput", "type": "promptString", "description": "Local release output directory", "default": ".local/releases"},
+    {"id": "signingKey", "type": "promptString", "description": "Path to private release signing key (never stored in tasks)"}
+  ]
+}

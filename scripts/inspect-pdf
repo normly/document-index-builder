@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 normly contributors
+set -euo pipefail
+if [[ $# != 4 ]]; then
+  echo 'Usage: inspect-pdf PDF CONFIG SOURCE OUTPUT_DIRECTORY' >&2
+  exit 2
+fi
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+pdf=$(realpath -- "$1")
+config=$(realpath -- "$2")
+source=$3
+output=$(realpath -m -- "$4")
+[[ -f "$pdf" && -f "$config" ]] || { echo 'PDF and configuration must be files' >&2; exit 2; }
+[[ ! -e "$output" ]] || { echo 'Output already exists; choose a fresh directory' >&2; exit 1; }
+case "$source" in baua|dguv|eur-lex) ;; *) echo 'Unknown source adapter' >&2; exit 2;; esac
+case "$pdf$config$output" in *:*) echo 'Colon characters are not supported in bind-mount paths' >&2; exit 2;; esac
+mkdir -p -- "$(dirname -- "$output")"
+scratch=$(mktemp -d -- "$(dirname -- "$output")/.inspection-XXXXXXXX")
+# Only remove the private directory made above, never the user's destination.
+trap 'status=$?; rm -rf -- "$scratch"; exit "$status"' EXIT
+docker compose --project-directory "$root" -f "$root/compose.build.yaml" run --rm --no-deps \
+  --user "$(id -u):$(id -g)" --env HOME=/tmp --env HF_HOME=/tmp/hf \
+  --volume "$pdf:/inputs/document.pdf:ro" \
+  --volume "$config:/config/inspection.json:ro" \
+  --volume "$scratch:/outputs:rw" \
+  builder inspect --source "$source" --input /inputs/document.pdf \
+  --config /config/inspection.json --output /outputs/result
+[[ ! -e "$output" ]] || { echo 'Output appeared during inspection; refusing overwrite' >&2; exit 1; }
+mv -T -- "$scratch/result" "$output"
+echo "Open $output/document.md in VS Code and use Markdown: Open Preview to the Side."

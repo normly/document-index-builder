@@ -1,0 +1,16 @@
+{
+  "source": "baua",
+  "input_sha256": "REPLACE_WITH_SHA256_OF_AUTHORIZED_PDF",
+  "rights": {
+    "jurisdiction": "DE",
+    "may_process": false,
+    "legal_basis_reference": "REPLACE_WITH_DOCUMENTED_PROCESSING_CLASSIFICATION"
+  },
+  "docling": {
+    "do_ocr": false,
+    "do_table_structure": true,
+    "table_structure_mode": "accurate",
+    "accelerator_device": "cpu",
+    "accelerator_threads": 4
+  }
+}

@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 normly contributors
+set -euo pipefail
+if [[ $# != 4 ]]; then
+  echo 'Usage: build-knowledge CONFIG INPUT_DIRECTORY OUTPUT_DIRECTORY SIGNING_KEY' >&2
+  exit 2
+fi
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+config=$(realpath -- "$1")
+inputs=$(realpath -- "$2")
+output=$(realpath -m -- "$3")
+key=$(realpath -- "$4")
+[[ -f "$config" && -d "$inputs" && -f "$key" ]] || { echo 'Missing build configuration, inputs or signing key' >&2; exit 2; }
+case "$config$inputs$output$key" in *:*) echo 'Colon characters are not supported in bind-mount paths' >&2; exit 2;; esac
+mkdir -p -- "$output"
+docker compose --project-directory "$root" -f "$root/compose.build.yaml" up -d --wait build-postgres
+image_id=$(docker image inspect --format '{{.Id}}' normly/document-index-builder:dev)
+exec docker compose --project-directory "$root" -f "$root/compose.build.yaml" run --rm --no-deps \
+  --user "$(id -u):$(id -g)" --env HOME=/tmp --env HF_HOME=/tmp/hf \
+  --env "NORMLY_BUILDER_IMAGE_DIGEST=$image_id" \
+  --volume "$config:/config/build.json:ro" --volume "$inputs:/inputs:ro" \
+  --volume "$key:/run/secrets/build-key.pem:ro" --volume "$output:/outputs:rw" \
+  builder build --config /config/build.json --output-directory /outputs \
+  --signing-key-file /run/secrets/build-key.pem
