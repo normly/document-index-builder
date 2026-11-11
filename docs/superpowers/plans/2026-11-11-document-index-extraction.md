@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python >=3.11, uv, SQLAlchemy/Alembic, PostgreSQL/pgvector, Docling, sentence-transformers, FastAPI, PyArrow, cryptography, pytest, Docker Compose. Reuse source lockfile/model pins; resolve changes explicitly rather than upgrading incidentally.
 
-**Spec:** `docs/superpowers/specs/2026-11-11-document-index-extraction-design.md` (draft; approval required before implementation).
+**Spec:** `docs/superpowers/specs/2026-11-11-document-index-extraction-design.md` (approved by the user's implementation request).
 
 ## Global Constraints
 

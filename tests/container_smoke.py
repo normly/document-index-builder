@@ -136,6 +136,7 @@ try:
         dict(base, COMPOSE_PROJECT_NAME=inspect_project),
     )
     assert (work / "inspection/document.md").is_file()
+    assert (work / "inspection/document.md").stat().st_uid == os.getuid()
     assert set(
         json.loads((work / "inspection/report.json").read_text())["model_revisions"]
     ) == {"layout", "layout_onnx", "tableformer"}

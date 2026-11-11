@@ -15,6 +15,7 @@ run ingestion or access knowledge tables directly.
 - [Signed knowledge exchange](docs/guide/knowledge-releases.md)
 - [Software verification and releases](docs/guide/releasing.md)
 - [Extraction ownership and coordinated web_app cutover](docs/guide/extraction-map.md)
+- [Local verification evidence and remaining external checks](docs/guide/verification.md)
 
 Docker builds have two targets: `builder` (ingestion and single-PDF inspection)
 and `retrieval` (query API, without Docling). PostgreSQL is separate; neither

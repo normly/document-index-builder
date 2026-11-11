@@ -1,6 +1,6 @@
 # Document index extraction design
 
-Status: draft for review. This records the agreed direction; implementation details below are proposals, not yet approved decisions.
+Status: approved for implementation by the user's request to implement this plan (2026-11-11). The coordinated `web_app` cutover remains a separate approval gate.
 
 ## Intent
 
