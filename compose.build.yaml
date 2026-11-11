@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: document-index-build
+services:
+  build-postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: document_index_build
+      POSTGRES_USER: document_index
+      POSTGRES_PASSWORD: ${NORMLY_BUILD_POSTGRES_PASSWORD:-}
+    volumes:
+      - build-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U document_index -d document_index_build"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  builder:
+    image: normly/document-index-builder:dev
+    build:
+      context: .
+      dockerfile: docker/python.Dockerfile
+      target: builder
+    environment:
+      NORMLY_DATABASE_URL: postgresql+psycopg://document_index:${NORMLY_BUILD_POSTGRES_PASSWORD}@build-postgres:5432/document_index_build
+    depends_on:
+      build-postgres:
+        condition: service_healthy
+volumes:
+  build-data:

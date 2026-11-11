@@ -1,0 +1,23 @@
+# Allow-list source-only build contexts. Corpus/config/keys/outputs never enter.
+**
+!pyproject.toml
+!uv.lock
+!LICENSE
+!core/
+!core/pyproject.toml
+!core/alembic.ini
+!core/src/
+!core/src/**
+!core/migrations/
+!core/migrations/**
+!api/
+!api/pyproject.toml
+!api/src/
+!api/src/**
+!docker/
+!docker/**
+**/__pycache__/
+**/*.pyc
+**/*.pdf
+**/*.parquet
+**/*.pem
