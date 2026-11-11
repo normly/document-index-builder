@@ -2,6 +2,8 @@
 
 Use the **builder image**, not the retrieval image. Inspection parses one explicitly authorized PDF and writes Markdown/native Docling JSON without starting PostgreSQL, computing embeddings, chunking or publishing anything. Linux, Bash, GNU coreutils and Docker Compose/buildx are the local prerequisites; no host Python environment is required.
 
+The shared converter accepts PDF only. HTML, images and other Docling formats are rejected rather than entering pipelines with different defaults or unprepared models, even when their hash and processing classification are supplied.
+
 ## First use
 
 1. Run **Terminal → Run Task → Document Index: Build builder image** in VS Code. Image preparation downloads pinned code/model artifacts; subsequent parsing is offline.
@@ -19,6 +21,8 @@ scripts/inspect-pdf '/path/with spaces/example.pdf' \
 ```
 
 Inputs and configuration are mounted read-only. Only a private temporary output directory is writable, rather than exposing its whole parent to the parser. The container uses the host UID/GID and a temporary cache, so outputs are not root-owned. Failures preserve exit codes, existing destinations remain untouched, and temporary outputs are cleaned. Paths containing spaces are supported; colons in bind-mount paths are rejected explicitly. Inspection needs no database password even though full builds use the same Compose file.
+
+Do not create the destination concurrently with publication: a deferred narrow check/rename race can replace an empty directory created at that instant. Existing nonempty outputs are protected, and ordinary sequential reruns refuse any existing destination.
 
 ## Configuration and output
 

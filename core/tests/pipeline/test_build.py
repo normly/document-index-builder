@@ -200,3 +200,125 @@ def test_build_refuses_a_database_with_no_exportable_documents(
             signing_key_file=key,
         )
     assert not (tmp_path / "releases" / "2026.11.1").exists()
+
+
+def test_pending_conflicting_work_review_blocks_release_even_when_summary_is_zero(
+    build_db_url, tmp_path, monkeypatch
+):
+    from normly_core.pipeline.build import run_build
+    from normly_core.pipeline.build_config import load_build_config
+    from normly_core.pipeline.sources import resolve_source
+    from normly_core.graph.postgres.repositories import PostgresSourceRepository
+    from normly_core.graph.domain import EdgeType
+    from normly_core.pipeline.domain import RawRecord, RawReference
+    from .test_runner import _FakeAdapter
+
+    class Model:
+        def embed(self, text):
+            return [1.0] + [0.0] * 1023
+
+    def adapter(source, *, directory, session):
+        registered = resolve_source(PostgresSourceRepository(session), source)
+        records = [
+            RawRecord(
+                source_id=registered.id,
+                content_hash="sha256:build-conflict-din",
+                raw_designation="EN ISO 9001:2015",
+                raw_issuer="DIN",
+                raw_title=None,
+                full_text=None,
+            ),
+            RawRecord(
+                source_id=registered.id,
+                content_hash="sha256:build-conflict-iso",
+                raw_designation="9001:2015",
+                raw_issuer="ISO",
+                raw_title=None,
+                full_text=None,
+            ),
+            RawRecord(
+                source_id=registered.id,
+                content_hash="sha256:build-conflict-bs",
+                raw_designation="EN ISO 9001:2015",
+                raw_issuer="BS",
+                raw_title=None,
+                full_text=None,
+                raw_references=[
+                    RawReference(
+                        target_issuer="DIN",
+                        target_designation="EN ISO 9001:2015",
+                        edge_type=EdgeType.ADOPTED_FROM,
+                    ),
+                    RawReference(
+                        target_issuer="ISO",
+                        target_designation="9001:2015",
+                        edge_type=EdgeType.REPLACES,
+                    ),
+                ],
+            ),
+        ]
+        return _FakeAdapter(registered.id, records)
+
+    monkeypatch.setattr("normly_core.pipeline.build.build_adapter", adapter)
+    monkeypatch.setattr("normly_core.pipeline.runner.EmbeddingModel", Model)
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    config = tmp_path / "build.json"
+    config.write_text(json.dumps(config_document(inputs)))
+    key = tmp_path / "private.pem"
+    key.write_bytes(generate_keypair()[0])
+    with pytest.raises(ValueError, match="pending.*review"):
+        run_build(
+            load_build_config(config),
+            database_url=build_db_url,
+            output_dir=tmp_path / "releases",
+            signing_key_file=key,
+        )
+    assert not (tmp_path / "releases" / "2026.11.1").exists()
+
+
+def test_changed_builder_implementation_cannot_reuse_existing_deliveries(
+    build_db_url, tmp_path, monkeypatch
+):
+    from normly_core.pipeline.build import run_build
+    from normly_core.pipeline.build_config import load_build_config
+    from normly_core.pipeline.sources import resolve_source
+    from normly_core.graph.postgres.repositories import PostgresSourceRepository
+    from normly_core.pipeline.domain import RawRecord
+    from .test_runner import _FakeAdapter
+
+    class Model:
+        def embed(self, text):
+            return [1.0] + [0.0] * 1023
+
+    def adapter(source, *, directory, session):
+        registered = resolve_source(PostgresSourceRepository(session), source)
+        record = RawRecord(
+            source_id=registered.id,
+            content_hash="sha256:implementation-reuse",
+            raw_designation="TRGS 900",
+            raw_issuer="BAuA",
+            raw_title=None,
+            full_text=None,
+        )
+        return _FakeAdapter(registered.id, [record])
+
+    monkeypatch.setattr("normly_core.pipeline.build.build_adapter", adapter)
+    monkeypatch.setattr("normly_core.pipeline.runner.EmbeddingModel", Model)
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    config = tmp_path / "build.json"
+    config.write_text(json.dumps(config_document(inputs)))
+    key = tmp_path / "private.pem"
+    key.write_bytes(generate_keypair()[0])
+    kwargs = dict(
+        config=load_build_config(config),
+        database_url=build_db_url,
+        signing_key_file=key,
+    )
+    monkeypatch.setenv("NORMLY_SOURCE_COMMIT", "implementation-before")
+    run_build(**kwargs, output_dir=tmp_path / "first")
+    monkeypatch.setenv("NORMLY_SOURCE_COMMIT", "implementation-after")
+    with pytest.raises(ValueError, match="implementation|configuration"):
+        run_build(**kwargs, output_dir=tmp_path / "second")
+    assert not (tmp_path / "second" / "2026.11.1").exists()

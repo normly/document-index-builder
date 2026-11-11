@@ -28,6 +28,7 @@ from normly_core.pipeline.docling_extraction import strict_extraction
 from normly_core.pipeline.docling_config import use_pdf_config
 from normly_core.pipeline.runner import run_adapter
 from normly_core.pipeline.sources import SOURCE_REGISTRY
+from normly_core.pipeline.implementation import implementation_identity
 
 
 def input_hashes(config: BuildConfig) -> dict[str, str]:
@@ -62,19 +63,25 @@ def run_build(
             serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
         )
         hashes = input_hashes(config)
+        core_dir = Path(os.environ.get("NORMLY_CORE_DIR", Path(__file__).parents[3]))
+        implementation = implementation_identity(core_dir)
         fingerprint = hashlib.sha256(
             json.dumps(
-                {"config": asdict(config), "inputs": hashes},
+                {
+                    "config": asdict(config),
+                    "inputs": hashes,
+                    "implementation": implementation,
+                },
                 default=str,
                 sort_keys=True,
             ).encode()
         ).hexdigest()
-        core_dir = Path(os.environ.get("NORMLY_CORE_DIR", Path(__file__).parents[3]))
         upgrade_to_head(database_url, core_dir)
         engine = create_engine(database_url)
         with tempfile.TemporaryDirectory(prefix=".build-", dir=output_dir) as scratch:
             with Session(engine) as session, session.begin():
-                PostgresBuildRepository(session).claim(config.build_id, fingerprint)
+                builds = PostgresBuildRepository(session)
+                builds.claim(config.build_id, fingerprint)
                 with strict_extraction(), use_pdf_config(config.docling):
                     for source in config.sources:
                         adapter = build_adapter(
@@ -90,6 +97,9 @@ def run_build(
                             )
                 if input_hashes(config) != hashes:
                     raise ValueError("source inputs changed during the build")
+                if implementation_identity(core_dir) != implementation:
+                    raise ValueError("builder implementation changed during the build")
+                builds.ensure_no_pending_review()
                 repository = PostgresKnowledgeExchangeRepository(session)
                 directory = export_dump(
                     repository,
@@ -131,12 +141,9 @@ def run_build(
                         "revision": config.embedding_model_revision,
                         "dimension": config.embedding_dimension,
                     },
-                    "source_commit": os.environ.get(
-                        "NORMLY_SOURCE_COMMIT", "development"
-                    ),
-                    "image_digest": os.environ.get(
-                        "NORMLY_BUILDER_IMAGE_DIGEST", "unrecorded"
-                    ),
+                    "source_commit": implementation["source_commit"],
+                    "image_digest": implementation["image_digest"],
+                    "implementation": implementation,
                     "authenticated": False,
                 }
                 (directory / "build-provenance.json").write_text(

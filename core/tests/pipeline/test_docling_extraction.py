@@ -16,7 +16,33 @@ from normly_core.pipeline.docling_extraction import (
 )
 
 from .synthetic_fixtures import fixture_directory
+
 FIXTURE_DIR = fixture_directory()
+
+
+@pytest.mark.parametrize("extension", ["html", "png"])
+def test_pdf_extractor_rejects_other_formats_without_initializing_their_pipelines(
+    tmp_path, monkeypatch, extension
+):
+    path = tmp_path / f"not-a-pdf.{extension}"
+    if extension == "html":
+        path.write_text("<html><body>Invented synthetic HTML input</body></html>")
+    else:
+        from PIL import Image
+
+        Image.new("RGB", (20, 20), "white").save(path)
+    monkeypatch.setattr(DocumentConverter, "initialize_pipeline", lambda *a: None)
+
+    def forbidden_pipeline(*args, **kwargs):
+        raise AssertionError("non-PDF input entered a pipeline")
+
+    monkeypatch.setattr(DocumentConverter, "_get_pipeline", forbidden_pipeline)
+    docling_extraction._converters.clear()
+    try:
+        with pytest.raises(DocumentExtractionError):
+            extract_document(path)
+    finally:
+        docling_extraction._converters.clear()
 
 
 def test_extract_document_returns_text_content_for_a_real_pdf():
@@ -86,8 +112,14 @@ def test_extract_document_caches_separately_per_artifacts_path(monkeypatch, tmp_
         docling_extraction._get_converter(other_path)
 
     default = docling_extraction.DOCLING_PDF_CONFIG
-    assert set(docling_extraction._converters) == {(None, default), (other_path, default)}
-    assert docling_extraction._converters[(None, default)] is not docling_extraction._converters[(other_path, default)]
+    assert set(docling_extraction._converters) == {
+        (None, default),
+        (other_path, default),
+    }
+    assert (
+        docling_extraction._converters[(None, default)]
+        is not docling_extraction._converters[(other_path, default)]
+    )
 
 
 def test_converter_uses_the_shared_explicit_pdf_configuration(monkeypatch):
@@ -101,7 +133,9 @@ def test_converter_uses_the_shared_explicit_pdf_configuration(monkeypatch):
             docling_extraction._get_converter(None)
 
         format_options = converter_class.call_args.kwargs["format_options"]
-        pipeline_options = format_options[docling_extraction.InputFormat.PDF].pipeline_options
+        pipeline_options = format_options[
+            docling_extraction.InputFormat.PDF
+        ].pipeline_options
         assert config.do_ocr is False
         assert config.do_table_structure is True
         assert config.table_structure_mode == "accurate"
@@ -110,12 +144,14 @@ def test_converter_uses_the_shared_explicit_pdf_configuration(monkeypatch):
         assert pipeline_options.do_ocr is config.do_ocr
         assert pipeline_options.do_table_structure is config.do_table_structure
         assert (
-            pipeline_options.table_structure_options.mode
-            == config.table_structure_mode
+            pipeline_options.table_structure_options.mode == config.table_structure_mode
         )
         assert pipeline_options.table_structure_options.do_cell_matching is True
         assert pipeline_options.accelerator_options.device == config.accelerator_device
-        assert pipeline_options.accelerator_options.num_threads == config.accelerator_threads
+        assert (
+            pipeline_options.accelerator_options.num_threads
+            == config.accelerator_threads
+        )
         assert pipeline_options.artifacts_path is None
         converter_class.return_value.initialize_pipeline.assert_called_once()
     finally:
@@ -149,7 +185,9 @@ def test_a_bad_artifacts_path_raises_a_normly_error_when_the_converter_is_built(
     assert docling_extraction._converters == {}
 
 
-def test_an_artifacts_path_without_models_raises_a_normly_error_too(monkeypatch, tmp_path):
+def test_an_artifacts_path_without_models_raises_a_normly_error_too(
+    monkeypatch, tmp_path
+):
     """The other half of the same misconfiguration: the path is a directory,
     but the pre-fetched models are not in it. Docling raises FileNotFoundError
     for that one; the caller must not have to know the difference."""

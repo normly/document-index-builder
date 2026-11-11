@@ -48,6 +48,7 @@ base = dict(
     NORMLY_BUILD_POSTGRES_PASSWORD=secrets.token_hex(16),
     NORMLY_POSTGRES_PASSWORD=secrets.token_hex(16),
     NORMLY_RETRIEVAL_IMAGE="normly/document-index-retrieval:dev",
+    NORMLY_BUILDER_IMAGE="normly/document-index-builder:dev",
     NORMLY_ENVIRONMENT="production",
 )
 projects = []

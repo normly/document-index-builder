@@ -9,7 +9,9 @@ from normly_core.graph.postgres.orm import (
     KnowledgeBuildORM,
     KnowledgeBaseImportORM,
     DocumentORM,
+    IdentityResolutionCaseORM,
 )
+from normly_core.graph.domain import IdentityResolutionStatus
 
 
 class PostgresBuildRepository:
@@ -23,7 +25,9 @@ class PostgresBuildRepository:
         existing = self.session.get(KnowledgeBuildORM, 1)
         if existing is not None:
             if existing.build_id != build_id or existing.fingerprint != fingerprint:
-                raise ValueError("database belongs to another build or configuration")
+                raise ValueError(
+                    "database belongs to another build, configuration or implementation"
+                )
         else:
             if self.session.scalar(sa.select(sa.func.count()).select_from(DocumentORM)):
                 raise ValueError("nonempty database has no build identity")
@@ -31,3 +35,16 @@ class PostgresBuildRepository:
                 KnowledgeBuildORM(id=1, build_id=build_id, fingerprint=fingerprint)
             )
             self.session.flush()
+
+    def ensure_no_pending_review(self) -> None:
+        pending = self.session.scalar(
+            sa.select(
+                sa.exists().where(
+                    IdentityResolutionCaseORM.status == IdentityResolutionStatus.PENDING
+                )
+            )
+        )
+        if pending:
+            raise ValueError(
+                "pending identity or work review blocks release publication"
+            )

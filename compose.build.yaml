@@ -15,7 +15,7 @@ services:
       timeout: 5s
       retries: 20
   builder:
-    image: normly/document-index-builder:dev
+    image: ${NORMLY_BUILDER_IMAGE:-normly/document-index-builder:dev}
     build:
       context: .
       dockerfile: docker/python.Dockerfile

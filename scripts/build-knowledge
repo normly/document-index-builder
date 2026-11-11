@@ -15,7 +15,8 @@ key=$(realpath -- "$4")
 case "$config$inputs$output$key" in *:*) echo 'Colon characters are not supported in bind-mount paths' >&2; exit 2;; esac
 mkdir -p -- "$output"
 docker compose --project-directory "$root" -f "$root/compose.build.yaml" up -d --wait build-postgres
-image_id=$(docker image inspect --format '{{.Id}}' normly/document-index-builder:dev)
+image_id=$(docker image inspect --format '{{.Id}}' "${NORMLY_BUILDER_IMAGE:-normly/document-index-builder:dev}")
+export NORMLY_BUILDER_IMAGE="$image_id"
 exec docker compose --project-directory "$root" -f "$root/compose.build.yaml" run --rm --no-deps \
   --user "$(id -u):$(id -g)" --env HOME=/tmp --env HF_HOME=/tmp/hf \
   --env "NORMLY_BUILDER_IMAGE_DIGEST=$image_id" \

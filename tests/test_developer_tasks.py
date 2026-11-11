@@ -20,8 +20,11 @@ import json,os,sys
 from pathlib import Path
 args=sys.argv[1:]
 with open(os.environ['DOCKER_LOG'],'a') as f:f.write(json.dumps(args)+'\\n')
+if os.environ.get('DOCKER_ENV_LOG'):
+ with open(os.environ['DOCKER_ENV_LOG'],'a') as f:f.write(json.dumps({'args':args,'builder_image':os.environ.get('NORMLY_BUILDER_IMAGE')})+'\\n')
 status=int(os.environ.get('FAKE_DOCKER_EXIT','0'))
 if status:sys.exit(status)
+if args[:2]==['image','inspect']:print('sha256:resolved-test-image')
 if 'inspect' in args and '--no-deps' in args:
  for arg in args:
   if arg.endswith(':/outputs:rw'):
@@ -113,3 +116,34 @@ def test_vscode_tasks_expose_the_three_documented_workflows():
         "releaseOutput",
         "signingKey",
     }
+
+
+def test_build_wrapper_pins_the_resolved_image_instead_of_reusing_a_mutable_tag(
+    tmp_path, fake_docker
+):
+    env, _ = fake_docker
+    config, key = tmp_path / "build.json", tmp_path / "test.pem"
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    config.write_text("{}")
+    key.write_text("ephemeral test placeholder")
+    environment_log = tmp_path / "environment.jsonl"
+    env = {**env, "DOCKER_ENV_LOG": str(environment_log)}
+    env.pop("NORMLY_BUILDER_IMAGE", None)
+    result = subprocess.run(
+        [
+            str(ROOT / "scripts/build-knowledge"),
+            str(config),
+            str(inputs),
+            str(tmp_path / "output"),
+            str(key),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    calls = [json.loads(line) for line in environment_log.read_text().splitlines()]
+    run = next(call for call in calls if "run" in call["args"])
+    assert run["builder_image"] == "sha256:resolved-test-image"
+    assert "NORMLY_BUILDER_IMAGE_DIGEST=sha256:resolved-test-image" in run["args"]

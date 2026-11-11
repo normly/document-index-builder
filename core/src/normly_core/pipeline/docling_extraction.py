@@ -166,6 +166,7 @@ def _get_converter(artifacts_path_value: str | None) -> DocumentConverter:
                 ),
             )
             converter = DocumentConverter(
+                allowed_formats=[InputFormat.PDF],
                 format_options={
                     InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
                 }
