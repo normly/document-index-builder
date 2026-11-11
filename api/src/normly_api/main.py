@@ -7,10 +7,13 @@ import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
-from normly_core.embeddings import EmbeddingModel
+from normly_core.embeddings import EmbeddingModel, MODEL_REVISION
+from normly_core.graph.postgres.lifecycle import PostgresLifecycleRepository
+from normly_api.dependencies import get_session
 
 from normly_api.errors import COMMON_ERROR_RESPONSES, register_exception_handlers
 from normly_api.rate_limit import enforce_rate_limit
@@ -55,6 +58,18 @@ def create_app() -> FastAPI:
         },
         lifespan=lifespan,
     )
+
+    @app.get(
+        "/health/ready", tags=["health"], responses={503: COMMON_ERROR_RESPONSES[503]}
+    )
+    def readiness(session: Session = Depends(get_session)) -> dict[str, str]:
+        record = PostgresLifecycleRepository(session).ready_record(
+            os.environ.get("NORMLY_EMBEDDING_MODEL_REVISION", MODEL_REVISION)
+        )
+        if record is None:
+            raise HTTPException(status_code=503, detail="knowledge release not ready")
+        return {"status": "ready", "knowledge_version": record.dump_version}
+
     # Every router gets the 400/503 pair, because the handlers registered just
     # below can fire on any route regardless of what that route declares. The
     # 404s are NOT here: only some routes can raise one, and claiming the rest
@@ -69,35 +84,43 @@ def create_app() -> FastAPI:
     # coercion with a 400 -- Starlette does not fall through to try
     # search_router's /v1/documents/search afterwards.
     app.include_router(
-        search_router, responses=COMMON_ERROR_RESPONSES,
+        search_router,
+        responses=COMMON_ERROR_RESPONSES,
         dependencies=[Depends(enforce_rate_limit)],
     )
     app.include_router(
-        documents_router, responses=COMMON_ERROR_RESPONSES,
+        documents_router,
+        responses=COMMON_ERROR_RESPONSES,
         dependencies=[Depends(enforce_rate_limit)],
     )
     app.include_router(
-        edges_router, responses=COMMON_ERROR_RESPONSES,
+        edges_router,
+        responses=COMMON_ERROR_RESPONSES,
         dependencies=[Depends(enforce_rate_limit)],
     )
     app.include_router(
-        work_router, responses=COMMON_ERROR_RESPONSES,
+        work_router,
+        responses=COMMON_ERROR_RESPONSES,
         dependencies=[Depends(enforce_rate_limit)],
     )
     app.include_router(
-        rights_router, responses=COMMON_ERROR_RESPONSES,
+        rights_router,
+        responses=COMMON_ERROR_RESPONSES,
         dependencies=[Depends(enforce_rate_limit)],
     )
     app.include_router(
-        segments_router, responses=COMMON_ERROR_RESPONSES,
+        segments_router,
+        responses=COMMON_ERROR_RESPONSES,
         dependencies=[Depends(enforce_rate_limit)],
     )
     app.include_router(
-        export_router, responses=COMMON_ERROR_RESPONSES,
+        export_router,
+        responses=COMMON_ERROR_RESPONSES,
         dependencies=[Depends(enforce_rate_limit)],
     )
     app.include_router(
-        validity_router, responses=COMMON_ERROR_RESPONSES,
+        validity_router,
+        responses=COMMON_ERROR_RESPONSES,
         dependencies=[Depends(enforce_rate_limit)],
     )
     register_exception_handlers(app)

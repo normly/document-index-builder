@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: document-index
+x-runtime: &runtime
+  image: ${NORMLY_RETRIEVAL_IMAGE:-normly/document-index-retrieval:dev}
+  build:
+    context: .
+    dockerfile: docker/python.Dockerfile
+    target: retrieval
+  environment: &runtime-env
+    NORMLY_DATABASE_URL: postgresql+psycopg://document_index:${NORMLY_POSTGRES_PASSWORD:?set a dedicated consumer database password}@postgres:5432/document_index
+    NORMLY_EMBEDDING_MODEL_REVISION: 3d7cfbdacd47fdda877c5cd8a79fbcc4f2a574f3
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: document_index
+      POSTGRES_USER: document_index
+      POSTGRES_PASSWORD: ${NORMLY_POSTGRES_PASSWORD}
+    volumes:
+      - knowledge-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U document_index -d document_index"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+  migrate:
+    <<: *runtime
+    command: ["python", "-m", "normly_core.migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+  bootstrap:
+    <<: *runtime
+    command: ["python", "-m", "normly_core.exchange.bootstrap"]
+    environment:
+      <<: *runtime-env
+      NORMLY_KB_VERSION: ${NORMLY_KB_VERSION:?select an immutable knowledge release}
+      NORMLY_KB_BASE_URL: ${NORMLY_KB_BASE_URL:?set the authorized knowledge release URL}
+      NORMLY_KB_PUBLIC_KEY_FILE: /run/secrets/kb-signing.pub.pem
+      NORMLY_ENVIRONMENT: ${NORMLY_ENVIRONMENT:-production}
+    volumes:
+      - ${NORMLY_KB_PUBLIC_KEY_FILE:?set a separately trusted public key path}:/run/secrets/kb-signing.pub.pem:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+  retrieval:
+    <<: *runtime
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 120s
+    restart: unless-stopped
+volumes:
+  knowledge-data:
+networks:
+  default:
+    name: ${NORMLY_NETWORK_NAME:-document-index}

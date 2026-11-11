@@ -17,7 +17,7 @@ from normly_core.graph.postgres.repositories import (
 def test_openapi_schema_documents_every_v1_endpoint(client):
     schema = client.get("/openapi.json").json()
 
-    paths = set(schema["paths"].keys())
+    paths = {path for path in schema["paths"] if path.startswith("/v1/")}
     assert paths == {
         "/v1/documents",
         "/v1/documents/search",
@@ -50,8 +50,11 @@ def test_openapi_schema_documents_the_error_responses_with_their_model(client):
     # The 400/503 pair comes from the app-wide handlers, so every path declares
     # it -- including /v1/export, which reaches it through its own 400 override.
     for path in schema["paths"]:
+        if not path.startswith("/v1/"):
+            continue
         assert model_ref(path, "400") == error_ref, path
         assert model_ref(path, "503") == error_ref, path
+    assert model_ref("/health/ready", "503") == error_ref
 
     # 404 only where a route can actually raise one.
     for path in (

@@ -257,6 +257,13 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             # import
             from normly_core.embeddings import MODEL_NAME
+            from normly_core.graph.postgres.lifecycle import PostgresLifecycleRepository
+
+            try:
+                PostgresLifecycleRepository(session).lock_and_current()
+            except ValueError:
+                print("import refused: database belongs to an ingestion build", file=sys.stderr)
+                return 1
 
             with tempfile.TemporaryDirectory() as scratch:
                 if args.fetch:
