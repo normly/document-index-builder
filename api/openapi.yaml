@@ -1,0 +1,1461 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "normly API",
+    "description": "Deterministic reference-graph queries over normly's free content. No authentication required for free-tier jurisdictions.",
+    "license": {
+      "name": "AGPL-3.0-or-later",
+      "url": "https://www.gnu.org/licenses/agpl-3.0.html"
+    },
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/v1/documents/search": {
+      "get": {
+        "tags": [
+          "search"
+        ],
+        "summary": "Search Documents Endpoint",
+        "operationId": "search_documents_endpoint_v1_documents_search_get",
+        "parameters": [
+          {
+            "name": "jurisdiction",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Jurisdiction"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "issuer",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Issuer"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkSearchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request -- an invalid or missing path or query parameter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for this origin/session. Retry after the current window ends.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service cannot reach its database. Retrying may succeed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/documents": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Search Documents",
+        "operationId": "search_documents_v1_documents_get",
+        "parameters": [
+          {
+            "name": "issuer",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Issuer"
+            }
+          },
+          {
+            "name": "designation",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Designation"
+            }
+          },
+          {
+            "name": "jurisdiction",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Jurisdiction"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request -- an invalid or missing path or query parameter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for this origin/session. Retry after the current window ends.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service cannot reach its database. Retrying may succeed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such document, or the document is not rights-classified for the requested jurisdiction. The two are deliberately indistinguishable: telling them apart would disclose the existence of gated content.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/documents/{document_id}": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Get Document",
+        "operationId": "get_document_v1_documents__document_id__get",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "jurisdiction",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Jurisdiction"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request -- an invalid or missing path or query parameter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for this origin/session. Retry after the current window ends.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service cannot reach its database. Retrying may succeed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such document, or the document is not rights-classified for the requested jurisdiction. The two are deliberately indistinguishable: telling them apart would disclose the existence of gated content.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/documents/{document_id}/edges": {
+      "get": {
+        "tags": [
+          "edges"
+        ],
+        "summary": "List Edges",
+        "operationId": "list_edges_v1_documents__document_id__edges_get",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "jurisdiction",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Jurisdiction"
+            }
+          },
+          {
+            "name": "edge_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/EdgeType"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Edge Type"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EdgeResponse"
+                  },
+                  "title": "Response List Edges V1 Documents  Document Id  Edges Get"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request -- an invalid or missing path or query parameter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for this origin/session. Retry after the current window ends.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service cannot reach its database. Retrying may succeed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such document, or the document is not rights-classified for the requested jurisdiction. The two are deliberately indistinguishable: telling them apart would disclose the existence of gated content.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/documents/{document_id}/work": {
+      "get": {
+        "tags": [
+          "work"
+        ],
+        "summary": "Get Work Structure",
+        "operationId": "get_work_structure_v1_documents__document_id__work_get",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "jurisdiction",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Jurisdiction"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkStructureResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request -- an invalid or missing path or query parameter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for this origin/session. Retry after the current window ends.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service cannot reach its database. Retrying may succeed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such document, or the document is not rights-classified for the requested jurisdiction. The two are deliberately indistinguishable: telling them apart would disclose the existence of gated content.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/documents/{document_id}/rights": {
+      "get": {
+        "tags": [
+          "rights"
+        ],
+        "summary": "Get Rights",
+        "operationId": "get_rights_v1_documents__document_id__rights_get",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "jurisdiction",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Jurisdiction"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RightsClassificationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request -- an invalid or missing path or query parameter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for this origin/session. Retry after the current window ends.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service cannot reach its database. Retrying may succeed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such document, or the document is not rights-classified for the requested jurisdiction. The two are deliberately indistinguishable: telling them apart would disclose the existence of gated content.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/documents/{document_id}/segments": {
+      "get": {
+        "tags": [
+          "segments"
+        ],
+        "summary": "List Segments",
+        "operationId": "list_segments_v1_documents__document_id__segments_get",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "jurisdiction",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Jurisdiction"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SegmentResponse"
+                  },
+                  "title": "Response List Segments V1 Documents  Document Id  Segments Get"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request -- an invalid or missing path or query parameter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for this origin/session. Retry after the current window ends.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service cannot reach its database. Retrying may succeed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such document, or the document is not rights-classified for the requested jurisdiction. The two are deliberately indistinguishable: telling them apart would disclose the existence of gated content.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/export": {
+      "get": {
+        "tags": [
+          "export"
+        ],
+        "summary": "Export Free Graph",
+        "operationId": "export_free_graph_v1_export_get",
+        "parameters": [
+          {
+            "name": "jurisdiction",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Jurisdiction"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "json",
+              "title": "Format"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsupported export format. The only value accepted by `format` is `json`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for this origin/session. Retry after the current window ends.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service cannot reach its database. Retrying may succeed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/documents/{document_id}/validity": {
+      "get": {
+        "tags": [
+          "validity"
+        ],
+        "summary": "Get Validity",
+        "operationId": "get_validity_v1_documents__document_id__validity_get",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "jurisdiction",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Jurisdiction"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidityResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request -- an invalid or missing path or query parameter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded for this origin/session. Retry after the current window ends.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service cannot reach its database. Retrying may succeed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such document, or the document is not rights-classified for the requested jurisdiction. The two are deliberately indistinguishable: telling them apart would disclose the existence of gated content.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "DesignationResponse": {
+        "properties": {
+          "issuer": {
+            "type": "string",
+            "title": "Issuer"
+          },
+          "designation": {
+            "type": "string",
+            "title": "Designation"
+          },
+          "language": {
+            "type": "string",
+            "title": "Language"
+          },
+          "is_primary": {
+            "type": "boolean",
+            "title": "Is Primary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "issuer",
+          "designation",
+          "language",
+          "is_primary"
+        ],
+        "title": "DesignationResponse"
+      },
+      "DocumentResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "origin_issuer": {
+            "type": "string",
+            "title": "Origin Issuer"
+          },
+          "origin_number": {
+            "type": "string",
+            "title": "Origin Number"
+          },
+          "edition": {
+            "type": "string",
+            "title": "Edition"
+          },
+          "part": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Part"
+          },
+          "designations": {
+            "items": {
+              "$ref": "#/components/schemas/DesignationResponse"
+            },
+            "type": "array",
+            "title": "Designations"
+          },
+          "titles": {
+            "items": {
+              "$ref": "#/components/schemas/TitleResponse"
+            },
+            "type": "array",
+            "title": "Titles"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "origin_issuer",
+          "origin_number",
+          "edition",
+          "part",
+          "designations",
+          "titles",
+          "source"
+        ],
+        "title": "DocumentResponse"
+      },
+      "EdgeResponse": {
+        "properties": {
+          "edge_type": {
+            "type": "string",
+            "title": "Edge Type"
+          },
+          "from_document_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "From Document Id"
+          },
+          "to_document_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "To Document Id"
+          },
+          "jurisdiction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jurisdiction"
+          },
+          "layer": {
+            "type": "string",
+            "title": "Layer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "edge_type",
+          "from_document_id",
+          "to_document_id",
+          "jurisdiction",
+          "layer"
+        ],
+        "title": "EdgeResponse"
+      },
+      "EdgeType": {
+        "type": "string",
+        "enum": [
+          "references",
+          "replaces",
+          "withdrawn_by",
+          "based_on_law",
+          "adopted_from"
+        ],
+        "title": "EdgeType"
+      },
+      "ErrorResponse": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "ErrorResponse"
+      },
+      "ExportResponse": {
+        "properties": {
+          "license": {
+            "$ref": "#/components/schemas/LicenseNotice"
+          },
+          "schema_version": {
+            "type": "string",
+            "title": "Schema Version"
+          },
+          "jurisdiction": {
+            "type": "string",
+            "title": "Jurisdiction"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          },
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentResponse"
+            },
+            "type": "array",
+            "title": "Documents"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/EdgeResponse"
+            },
+            "type": "array",
+            "title": "Edges"
+          }
+        },
+        "type": "object",
+        "required": [
+          "license",
+          "schema_version",
+          "jurisdiction",
+          "generated_at",
+          "documents",
+          "edges"
+        ],
+        "title": "ExportResponse"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "LicenseNotice": {
+        "properties": {
+          "license_name": {
+            "type": "string",
+            "title": "License Name"
+          },
+          "license_url": {
+            "type": "string",
+            "title": "License Url"
+          },
+          "attribution": {
+            "type": "string",
+            "title": "Attribution"
+          }
+        },
+        "type": "object",
+        "required": [
+          "license_name",
+          "license_url",
+          "attribution"
+        ],
+        "title": "LicenseNotice"
+      },
+      "RightsClassificationResponse": {
+        "properties": {
+          "jurisdiction": {
+            "type": "string",
+            "title": "Jurisdiction"
+          },
+          "may_process": {
+            "type": "boolean",
+            "title": "May Process"
+          },
+          "may_index_fulltext": {
+            "type": "boolean",
+            "title": "May Index Fulltext"
+          },
+          "may_cite_passages": {
+            "type": "boolean",
+            "title": "May Cite Passages"
+          },
+          "may_export_free": {
+            "type": "boolean",
+            "title": "May Export Free"
+          },
+          "legal_basis_reference": {
+            "type": "string",
+            "title": "Legal Basis Reference"
+          }
+        },
+        "type": "object",
+        "required": [
+          "jurisdiction",
+          "may_process",
+          "may_index_fulltext",
+          "may_cite_passages",
+          "may_export_free",
+          "legal_basis_reference"
+        ],
+        "title": "RightsClassificationResponse"
+      },
+      "SegmentResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "sequence_number": {
+            "type": "integer",
+            "title": "Sequence Number"
+          },
+          "heading": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heading"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "sequence_number",
+          "heading",
+          "text"
+        ],
+        "title": "SegmentResponse"
+      },
+      "SourceResponse": {
+        "properties": {
+          "publisher": {
+            "type": "string",
+            "title": "Publisher"
+          },
+          "retrieval_path": {
+            "type": "string",
+            "title": "Retrieval Path"
+          },
+          "legal_basis_category": {
+            "type": "string",
+            "title": "Legal Basis Category"
+          },
+          "jurisdiction": {
+            "type": "string",
+            "title": "Jurisdiction"
+          }
+        },
+        "type": "object",
+        "required": [
+          "publisher",
+          "retrieval_path",
+          "legal_basis_category",
+          "jurisdiction"
+        ],
+        "title": "SourceResponse"
+      },
+      "TitleResponse": {
+        "properties": {
+          "language": {
+            "type": "string",
+            "title": "Language"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          }
+        },
+        "type": "object",
+        "required": [
+          "language",
+          "title"
+        ],
+        "title": "TitleResponse"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "ValidityResponse": {
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Document Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "valid",
+              "replaced",
+              "withdrawn"
+            ],
+            "title": "Status"
+          },
+          "replaced_by": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Replaced By"
+          },
+          "withdrawn_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Withdrawn Reference"
+          }
+        },
+        "type": "object",
+        "required": [
+          "document_id",
+          "status",
+          "replaced_by",
+          "withdrawn_reference"
+        ],
+        "title": "ValidityResponse"
+      },
+      "WorkSearchResponse": {
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/WorkSearchResultResponse"
+            },
+            "type": "array",
+            "title": "Results"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "results",
+          "total"
+        ],
+        "title": "WorkSearchResponse"
+      },
+      "WorkSearchResultResponse": {
+        "properties": {
+          "work_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Work Id"
+          },
+          "best_match": {
+            "$ref": "#/components/schemas/DocumentResponse"
+          },
+          "other_editions_count": {
+            "type": "integer",
+            "title": "Other Editions Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "work_id",
+          "best_match",
+          "other_editions_count"
+        ],
+        "title": "WorkSearchResultResponse"
+      },
+      "WorkStructureEntryResponse": {
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Document Id"
+          },
+          "origin_issuer": {
+            "type": "string",
+            "title": "Origin Issuer"
+          },
+          "origin_number": {
+            "type": "string",
+            "title": "Origin Number"
+          },
+          "edition": {
+            "type": "string",
+            "title": "Edition"
+          },
+          "designation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Designation"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "valid",
+              "replaced",
+              "withdrawn"
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "document_id",
+          "origin_issuer",
+          "origin_number",
+          "edition",
+          "designation",
+          "status"
+        ],
+        "title": "WorkStructureEntryResponse"
+      },
+      "WorkStructureResponse": {
+        "properties": {
+          "work_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Work Id"
+          },
+          "editions": {
+            "items": {
+              "$ref": "#/components/schemas/WorkStructureEntryResponse"
+            },
+            "type": "array",
+            "title": "Editions"
+          },
+          "national_adoptions": {
+            "items": {
+              "$ref": "#/components/schemas/WorkStructureEntryResponse"
+            },
+            "type": "array",
+            "title": "National Adoptions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "work_id",
+          "editions",
+          "national_adoptions"
+        ],
+        "title": "WorkStructureResponse"
+      }
+    }
+  }
+}

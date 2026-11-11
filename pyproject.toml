@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 [tool.uv.workspace]
-members = ["core"]
+members = ["core", "api"]
 
 [tool.uv.sources]
 normly-core = { workspace = true }
@@ -16,4 +16,5 @@ explicit = true
 dev = ["pytest>=8,<9", "testcontainers[postgres]>=4.15,<5", "pyyaml>=6,<7"]
 
 [tool.pytest.ini_options]
-testpaths = ["core/tests"]
+testpaths = ["core/tests", "api/tests"]
+addopts = "--import-mode=importlib"
