@@ -31,6 +31,16 @@ def _enum_values(enum_cls: type[Enum]) -> list[str]:
 class Base(DeclarativeBase):
     pass
 
+
+class KnowledgeBuildORM(Base):
+    __tablename__ = "knowledge_build"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    build_id: Mapped[str]
+    fingerprint: Mapped[str]
+
+    __table_args__ = (sa.CheckConstraint("id = 1", name="ck_knowledge_build_single_row"),)
+
 class SourceORM(Base):
     __tablename__ = "source"
 

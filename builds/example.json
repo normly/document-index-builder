@@ -1,0 +1,11 @@
+{
+  "build_id": "local-experiment-01",
+  "output_version": "2026.11.1",
+  "sources": [{"adapter": "baua", "directory": "/inputs/baua"}],
+  "embedding_model": {
+    "name": "intfloat/multilingual-e5-large",
+    "revision": "3d7cfbdacd47fdda877c5cd8a79fbcc4f2a574f3",
+    "dimension": 1024
+  },
+  "strategy": {"name": "source-adapters", "revision": "1"}
+}

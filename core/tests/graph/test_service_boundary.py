@@ -19,7 +19,7 @@ def test_migration_creates_only_knowledge_and_local_operational_tables(db_url):
             "source", "delivery", "work", "document", "document_designation",
             "document_title", "rights_classification", "edge", "segment",
             "embedding", "document_embedding", "identity_resolution_case",
-            "knowledge_base_import", "rate_limit_bucket", "alembic_version",
+            "knowledge_base_import", "rate_limit_bucket", "knowledge_build", "alembic_version",
         }
         for table in tables:
             assert all(fk["referred_table"] in tables for fk in inspector.get_foreign_keys(table))

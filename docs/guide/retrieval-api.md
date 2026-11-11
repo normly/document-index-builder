@@ -10,6 +10,6 @@ Missing and jurisdiction-invisible documents are indistinguishable (404). A visi
 
 The service's forwarded-header trust assumes a trusted reverse proxy is its only ingress. Never expose it directly to untrusted callers while trusting their forwarded headers. Keep database access private.
 
-Query and passage embeddings use the same pinned e5 model and separate `query:` / `passage:` prefixes. Set `NORMLY_EMBEDDING_MODEL_PATH` to prepared local weights; there is no runtime download fallback. Retrieval needs the embedding runtime but never Docling. Compatibility of the imported release and runtime model must be verified before readiness.
+Query and passage embeddings use the same pinned e5 model and separate `query:` / `passage:` prefixes. Set `NORMLY_EMBEDDING_MODEL_PATH` to prepared local weights with the preparation command's identity metadata (or the exact pinned Hugging Face cache snapshot); there is no runtime download fallback. Unknown model identities and wrong vector dimensions are refused. Retrieval needs the embedding runtime but never Docling. Compatibility of the imported release and runtime model must be verified before readiness.
 
 Breaking HTTP changes need a new API major. Additive changes must update the reviewed contract and tests explicitly. Passage-search/batch/notification additions requested by the web application cutover are separate approval gates, not silently supplied by document search.

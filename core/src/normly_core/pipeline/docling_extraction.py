@@ -1,0 +1,213 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 normly contributors
+
+"""Shared Docling document-extraction layer for all pipeline adapters.
+
+Production/CI requirement (STACKIT-only constraint -- no runtime access to
+external model sources, see AGENTS.md): the container image pre-fetches
+Docling's layout and table-structure models at pinned revisions into
+/opt/models/docling (docker/python.Dockerfile, stage `weights`, same folder
+layout as `docling-tools models download layout tableformer -o <path>`)
+and sets NORMLY_DOCLING_ARTIFACTS_PATH to that directory.
+With that set, extract_document() never attempts a network connection
+(verified by tests/pipeline/test_docling_offline.py). Without it (e.g.
+local development), Docling manages its own cache directory and downloads
+models on first use. That is convenient for exploration but does not guarantee
+the same model revisions as the pipeline image; use the image's pre-fetched
+artifacts for reproducible local ingestion.
+
+Font requirement: the layout model sees a rendered page image. PDFs that do
+not embed their fonts (the standard 14 -- Helvetica, Times, Courier -- are
+commonly left out) are rendered by pdfium with whatever system font is
+available; with none installed it falls back to a substitute whose metrics
+differ, and the layout model then classifies lines differently (observed:
+a publication title became `page_header`, i.e. furniture, and vanished from
+the body text). Deployments and CI therefore install `fonts-liberation`
+(metric-compatible with the standard 14); see docker/python.Dockerfile and
+.github/workflows/ci.yml.
+
+OCR is deliberately disabled (do_ocr=False): Docling's default pipeline
+runs OCR even on pure vector-text PDFs like the sources this codebase
+ingests today, and does so by downloading additional models from
+modelscope.cn -- a second external model source beyond Hugging Face that
+this project has no reason to depend on before an actual OCR need exists.
+"""
+
+from __future__ import annotations
+
+import os
+# Set before importing Docling/Hugging Face, whose offline flag is read at import.
+# Missing prepared/cache artifacts must fail rather than trigger runtime downloads.
+os.environ["HF_HUB_OFFLINE"] = "1"
+import sys
+import threading
+from contextlib import contextmanager
+from contextvars import ContextVar
+from pathlib import Path
+
+from docling.datamodel.accelerator_options import AcceleratorDevice, AcceleratorOptions
+from docling.datamodel.base_models import ConversionStatus, InputFormat
+from docling.datamodel.pipeline_options import (
+    PdfPipelineOptions,
+    TableFormerMode,
+    TableStructureOptions,
+)
+from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling.exceptions import ConversionError as _DoclingConversionError
+from docling_core.types.doc import DoclingDocument
+from normly_core.pipeline.docling_config import (
+    DoclingPdfConfig, DOCLING_PDF_CONFIG, current_pdf_config,
+)
+
+_ARTIFACTS_PATH_ENV = "NORMLY_DOCLING_ARTIFACTS_PATH"
+_STRICT_EXTRACTION = ContextVar("strict_extraction", default=False)
+
+
+@contextmanager
+def strict_extraction():
+    """A release build must not report success after silently dropping a PDF."""
+    token = _STRICT_EXTRACTION.set(True)
+    try:
+        yield
+    finally:
+        _STRICT_EXTRACTION.reset(token)
+
+
+# Constructing a DocumentConverter is itself cheap -- its __init__ only sets
+# up an empty `initialized_pipelines` dict. The cost (roughly 1s of fixed
+# overhead, independent of document size) is in the pipeline behind that dict:
+# Docling builds it, layout and TableFormer models included, on first use and
+# then reuses it. That cache is a *per-instance* dict, so a converter built
+# per call would reload the models every time. Hence: cache the converter.
+# _get_converter() below additionally forces that pipeline to be built at
+# cache time rather than on the first document, so the load cost is paid once
+# per adapter run and a misconfigured artifacts_path fails immediately.
+#
+# Docling supports reusing one instance across many convert() calls (its own
+# pipeline construction is guarded by a module-level lock to make this safe;
+# see its docstring: models are "initialised once per pipeline instance and
+# only read by worker threads"). Cache one converter per resolved
+# artifacts_path value so adapters processing many files per fetch() run
+# only pay the load cost once, while a test that monkeypatches
+# NORMLY_DOCLING_ARTIFACTS_PATH between calls still gets a converter built
+# for the path it set, not a stale one from a different path.
+_converters: dict[tuple[str | None, DoclingPdfConfig], DocumentConverter] = {}
+_converters_lock = threading.Lock()
+
+
+class DocumentExtractionError(Exception):
+    """Raised when Docling cannot parse a source file.
+
+    Scope: *one* file. Adapters catch this per file, report it, and carry on
+    with the next one -- see report_skipped_source(). Anything that will fail
+    the same way for every file must not be raised as this, or a run has no
+    way to tell "this PDF is corrupt" from "nothing here can ever work"; use
+    PipelineInitializationError.
+    """
+
+
+class PipelineInitializationError(Exception):
+    """Raised when Docling's PDF pipeline itself cannot be built.
+
+    Deliberately *not* a subclass of DocumentExtractionError. The two are
+    handled in opposite ways and the type is what separates them:
+
+    A corrupt PDF is a property of that file, so the adapters skip it and keep
+    going -- one bad file must block only itself. A broken pipeline is a
+    property of the deployment (NORMLY_DOCLING_ARTIFACTS_PATH pointing at a
+    typo, an unmounted volume, or a directory holding no models), so it fails
+    identically for every file in the directory. Were it a subclass, the
+    adapters' per-file `except DocumentExtractionError` would swallow it once
+    per file and the run would end with exit code 0, a success line, and zero
+    records ingested -- an unattended production run with a misconfigured
+    deployment looking exactly like a healthy one. As a separate class, a bare
+    `except DocumentExtractionError` lets it through, and it ends the run the
+    way it did before this layer existed: loudly, and with a non-zero exit
+    code.
+    """
+
+
+def report_skipped_source(path: Path, error: Exception) -> None:
+    """Report a source file an adapter had to skip, and carry on.
+
+    An adapter's fetch() is a generator, so an exception raised inside it
+    reaches the runner while it is pulling the next record -- outside the
+    per-record guard that makes "one bad record blocks only itself" true, and
+    with no way to resume the generator afterwards. One unreadable file would
+    therefore abort a whole ingestion run and silently lose every file behind
+    it. Adapters catch DocumentExtractionError per file and report it here
+    instead, mirroring how runner.py reports a failed record: on stderr, named,
+    and not fatal.
+    """
+    if _STRICT_EXTRACTION.get():
+        raise ValueError("a source file was skipped; refusing a partial release") from error
+    print(f"skipping {path}: {error!r}", file=sys.stderr)
+
+
+def _get_converter(artifacts_path_value: str | None) -> DocumentConverter:
+    config = current_pdf_config()
+    cache_key = (artifacts_path_value, config)
+    with _converters_lock:
+        converter = _converters.get(cache_key)
+        if converter is None:
+            pipeline_options = PdfPipelineOptions(
+                accelerator_options=AcceleratorOptions(
+                    num_threads=config.accelerator_threads,
+                    device=config.accelerator_device,
+                ),
+                do_ocr=config.do_ocr,
+                do_table_structure=config.do_table_structure,
+                table_structure_options=TableStructureOptions(
+                    do_cell_matching=True,
+                    mode=config.table_structure_mode,
+                ),
+                artifacts_path=(
+                    Path(artifacts_path_value) if artifacts_path_value else None
+                ),
+            )
+            converter = DocumentConverter(
+                format_options={
+                    InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+                }
+            )
+            # Build the pipeline now instead of letting convert() do it on the
+            # first document. Docling validates artifacts_path in the
+            # pipeline's constructor and signals a path that is not a
+            # directory -- a typo, an unmounted volume -- with a bare
+            # RuntimeError. Lazily, that surfaces only once real ingestion
+            # traffic arrives; eagerly, a misconfigured deployment fails where
+            # it is configured. RuntimeError is what Docling's own API
+            # documents for this call (see DocumentConverter.
+            # initialize_pipeline's docstring), so it is caught here, in this
+            # one narrow spot -- nothing else in the run may see a raw Docling
+            # error. It is translated into PipelineInitializationError and not
+            # into DocumentExtractionError: this failure is the deployment's,
+            # not this file's, and it must not be mistaken for a bad PDF and
+            # skipped once per file until the run reports success over nothing.
+            try:
+                converter.initialize_pipeline(InputFormat.PDF)
+            except (RuntimeError, FileNotFoundError, _DoclingConversionError) as exc:
+                raise PipelineInitializationError(
+                    "Docling could not initialise its PDF pipeline "
+                    f"(artifacts_path={artifacts_path_value!r}): {exc}"
+                ) from exc
+            # Only cache what is actually usable: a converter whose pipeline
+            # failed to initialise must not be handed to the next caller, so a
+            # corrected environment can still succeed without a restart.
+            _converters[cache_key] = converter
+        return converter
+
+
+def extract_document(path: Path) -> DoclingDocument:
+    artifacts_path_value = os.environ.get(_ARTIFACTS_PATH_ENV)
+    converter = _get_converter(artifacts_path_value)
+    try:
+        result = converter.convert(path)
+    except _DoclingConversionError as exc:
+        raise DocumentExtractionError(f"Docling could not parse {path}: {exc}") from exc
+    if result.status != ConversionStatus.SUCCESS:
+        raise DocumentExtractionError(
+            f"Docling only partially converted {path} (status={result.status}): "
+            f"{result.errors}"
+        )
+    return result.document

@@ -1,4 +1,10 @@
 # Byte-compiled / optimized / DLL files
+.local/
+.env
+*.pdf
+*.parquet
+*.pem
+!*.pub.pem
 __pycache__/
 *.py[codz]
 *$py.class

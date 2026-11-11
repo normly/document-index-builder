@@ -14,7 +14,8 @@ explicit = true
 
 [dependency-groups]
 dev = ["pytest>=8,<9", "testcontainers[postgres]>=4.15,<5", "pyyaml>=6,<7"]
+build = ["hatchling>=1.27,<2"]
 
 [tool.pytest.ini_options]
-testpaths = ["core/tests", "api/tests"]
+testpaths = ["core/tests", "api/tests", "tests"]
 addopts = "--import-mode=importlib"

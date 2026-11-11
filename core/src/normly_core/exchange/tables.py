@@ -38,7 +38,7 @@ USER_TABLES: tuple[str, ...] = ()
 # Local API bookkeeping, never exported as knowledge or user state.
 OPERATIONAL_TABLES: tuple[str, ...] = ("rate_limit_bucket",)
 
-PIPELINE_STATE_TABLES: tuple[str, ...] = ("identity_resolution_case",)
+PIPELINE_STATE_TABLES: tuple[str, ...] = ("identity_resolution_case", "knowledge_build")
 
 #: Written by the dump import itself; belongs to no group above.
 SYSTEM_TABLES: tuple[str, ...] = ("knowledge_base_import",)
