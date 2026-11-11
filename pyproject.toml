@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[tool.uv.workspace]
+members = ["core"]
+
+[tool.uv.sources]
+normly-core = { workspace = true }
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[dependency-groups]
+dev = ["pytest>=8,<9", "testcontainers[postgres]>=4.15,<5", "pyyaml>=6,<7"]
+
+[tool.pytest.ini_options]
+testpaths = ["core/tests"]

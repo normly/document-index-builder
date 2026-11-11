@@ -1,0 +1,1738 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 normly contributors
+
+import uuid
+
+from datetime import date, datetime
+
+import sqlalchemy as sa
+
+from sqlalchemy import select
+
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+from sqlalchemy.exc import IntegrityError
+
+from sqlalchemy.orm import Session, aliased
+
+from normly_core.graph.domain import ContradictoryWorkMergeError, DeliveryRepository, Delivery, DocumentEmbeddingRepository, Document, DocumentDesignation, DocumentEmbedding, DocumentRepository, DocumentTitle, EdgeRepository, Edge, EdgeType, Embedding, EmbeddingRepository, IdentityResolutionCase, IdentityResolutionCaseType, IdentityResolutionStatus, IdentityResolutionRepository, LegalBasisCategory, Layer, RateLimitRepository, RightsClassification, RightsRepository, Segment, SegmentRepository, Source, SourceRepository, TdmOptOutResult, WithdrawnDeliveryError, Work, WorkRepository, WorkCreatedVia, WorkSearchHit, WorkStatus, WorkStructure, WorkStructureEntry
+
+from normly_core.graph.postgres.orm import DeliveryORM, DocumentORM, DocumentDesignationORM, DocumentEmbeddingORM, DocumentTitleORM, EdgeORM, EmbeddingORM, IdentityResolutionCaseORM, RateLimitBucketORM, RightsClassificationORM, SegmentORM, SourceORM, WorkORM
+
+_SEMANTIC_CANDIDATE_POOL = 200
+
+_DOCUMENT_SEARCH_MAX_COSINE_DISTANCE = 0.6
+
+_TIER1_CANDIDATE_POOL = 10_000
+
+_WORK_STRUCTURE_EDGE_TYPES = (EdgeType.REPLACES, EdgeType.WITHDRAWN_BY, EdgeType.ADOPTED_FROM)
+
+_EDITION_CHAIN_EDGE_TYPES = (EdgeType.REPLACES, EdgeType.WITHDRAWN_BY)
+
+def _escape_like(term: str) -> str:
+    """
+    Neutralise LIKE metacharacters in a caller-supplied search term.
+
+    Not an injection concern -- the term is bound as a parameter either way --
+    but an unescaped "%" matches the whole catalogue in a single request, and
+    someone searching for a literal "100%" would otherwise get wildcard
+    behaviour they never asked for. The backslash goes first, or it would
+    escape the escapes added after it.
+    """
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+def _require_active_delivery(session: Session, delivery_id: uuid.UUID) -> None:
+    """
+    Guard every artifact-creating write path.
+
+    A withdrawn delivery must not gain new artifacts, and re-running an
+    ingestion for it must not resurrect what `revoke_delivery` locked —
+    `classify()` in particular writes `revoked_at=None` on every call.
+    """
+    delivery = session.get(DeliveryORM, delivery_id)
+    if delivery is None or delivery.withdrawn_at is not None:
+        raise WithdrawnDeliveryError(delivery_id)
+
+def _source_to_domain(orm: SourceORM) -> Source:
+    return Source(
+        id=orm.id,
+        publisher=orm.publisher,
+        retrieval_path=orm.retrieval_path,
+        legal_basis_category=orm.legal_basis_category,
+        jurisdiction=orm.jurisdiction,
+        reviewed_at=orm.reviewed_at,
+        responsible_person=orm.responsible_person,
+        commercial_catalog=orm.commercial_catalog,
+        contract_reference=orm.contract_reference,
+        tdm_opt_out_checked_at=orm.tdm_opt_out_checked_at,
+        tdm_opt_out_result=orm.tdm_opt_out_result,
+    )
+
+class PostgresSourceRepository(SourceRepository):
+    def __init__(self, session: Session):
+        self._session = session
+
+    def create_source(
+        self,
+        *,
+        publisher: str,
+        retrieval_path: str,
+        legal_basis_category: LegalBasisCategory,
+        jurisdiction: str,
+        reviewed_at: date,
+        responsible_person: str,
+        commercial_catalog: bool = False,
+        contract_reference: str | None = None,
+        tdm_opt_out_checked_at: date | None = None,
+        tdm_opt_out_result: TdmOptOutResult | None = None,
+    ) -> Source:
+        orm = SourceORM(
+            id=uuid.uuid4(),
+            publisher=publisher,
+            retrieval_path=retrieval_path,
+            legal_basis_category=legal_basis_category,
+            jurisdiction=jurisdiction,
+            reviewed_at=reviewed_at,
+            responsible_person=responsible_person,
+            commercial_catalog=commercial_catalog,
+            contract_reference=contract_reference,
+            tdm_opt_out_checked_at=tdm_opt_out_checked_at,
+            tdm_opt_out_result=tdm_opt_out_result,
+        )
+        self._session.add(orm)
+        self._session.flush()
+        return _source_to_domain(orm)
+
+    def get_source(self, source_id: uuid.UUID) -> Source | None:
+        orm = self._session.get(SourceORM, source_id)
+        return _source_to_domain(orm) if orm else None
+
+    def find_by_publisher(self, publisher: str) -> Source | None:
+        """
+        Look a registry entry up by its natural key.
+
+        `publisher` is deliberately not unique in the schema — one publisher may
+        legitimately be registered more than once (different retrieval paths,
+        different legal bases). This returns the oldest matching row by id so
+        repeated pipeline runs resolve to the same registry entry instead of
+        picking a different one each time.
+        """
+        orm = self._session.execute(
+            select(SourceORM)
+            .where(SourceORM.publisher == publisher)
+            .order_by(SourceORM.id)
+            .limit(1)
+        ).scalar_one_or_none()
+        return _source_to_domain(orm) if orm else None
+
+def _delivery_to_domain(orm: DeliveryORM) -> Delivery:
+    return Delivery(
+        id=orm.id,
+        source_id=orm.source_id,
+        content_hash=orm.content_hash,
+        ingested_at=orm.ingested_at,
+        withdrawn_at=orm.withdrawn_at,
+    )
+
+class PostgresDeliveryRepository(DeliveryRepository):
+    def __init__(self, session: Session):
+        self._session = session
+
+    def record_delivery(
+        self, *, source_id: uuid.UUID, content_hash: str, ingested_at: datetime
+    ) -> Delivery:
+        existing = self._session.execute(
+            select(DeliveryORM).where(
+                DeliveryORM.source_id == source_id,
+                DeliveryORM.content_hash == content_hash,
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return _delivery_to_domain(existing)
+
+        orm = DeliveryORM(
+            id=uuid.uuid4(),
+            source_id=source_id,
+            content_hash=content_hash,
+            ingested_at=ingested_at,
+            withdrawn_at=None,
+        )
+        try:
+            with self._session.begin_nested():
+                self._session.add(orm)
+                self._session.flush()
+        except IntegrityError:
+            existing = self._session.execute(
+                select(DeliveryORM).where(
+                    DeliveryORM.source_id == source_id,
+                    DeliveryORM.content_hash == content_hash,
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                raise
+            return _delivery_to_domain(existing)
+        return _delivery_to_domain(orm)
+
+    def get_delivery(self, delivery_id: uuid.UUID) -> Delivery | None:
+        orm = self._session.get(DeliveryORM, delivery_id)
+        return _delivery_to_domain(orm) if orm else None
+
+    def find_delivery(self, source_id: uuid.UUID, content_hash: str) -> Delivery | None:
+        orm = self._session.execute(
+            select(DeliveryORM).where(
+                DeliveryORM.source_id == source_id,
+                DeliveryORM.content_hash == content_hash,
+            )
+        ).scalar_one_or_none()
+        return _delivery_to_domain(orm) if orm else None
+
+    def revoke_delivery(self, delivery_id: uuid.UUID) -> None:
+        orm = self._session.get(DeliveryORM, delivery_id)
+        if orm is None or orm.withdrawn_at is not None:
+            return
+
+        now = datetime.now(orm.ingested_at.tzinfo)
+        orm.withdrawn_at = now
+
+        self._session.execute(
+            sa.update(EdgeORM)
+            .where(EdgeORM.delivery_id == delivery_id, EdgeORM.revoked_at.is_(None))
+            .values(revoked_at=now)
+        )
+        self._session.execute(
+            sa.update(RightsClassificationORM)
+            .where(
+                RightsClassificationORM.delivery_id == delivery_id,
+                RightsClassificationORM.revoked_at.is_(None),
+            )
+            .values(revoked_at=now)
+        )
+        self._session.execute(
+            sa.delete(DocumentDesignationORM).where(
+                DocumentDesignationORM.delivery_id == delivery_id
+            )
+        )
+        self._session.execute(
+            sa.delete(DocumentTitleORM).where(DocumentTitleORM.delivery_id == delivery_id)
+        )
+        # Must run before the EmbeddingORM delete below: embedding.segment_id
+        # has ON DELETE CASCADE, so deleting segments here first removes any
+        # embedding attached to a deleted segment regardless of which
+        # delivery created that embedding. The explicit EmbeddingORM delete
+        # then only needs to catch embeddings whose own delivery_id is the
+        # revoked one but whose segment belongs to a still-active delivery.
+        self._session.execute(
+            sa.delete(SegmentORM).where(SegmentORM.delivery_id == delivery_id)
+        )
+        self._session.execute(
+            sa.delete(EmbeddingORM).where(EmbeddingORM.delivery_id == delivery_id)
+        )
+        self._session.execute(
+            sa.delete(DocumentEmbeddingORM).where(
+                DocumentEmbeddingORM.delivery_id == delivery_id
+            )
+        )
+        self._session.execute(
+            sa.update(IdentityResolutionCaseORM)
+            .where(
+                IdentityResolutionCaseORM.delivery_id == delivery_id,
+                IdentityResolutionCaseORM.status == IdentityResolutionStatus.PENDING,
+            )
+            .values(
+                status=IdentityResolutionStatus.REJECTED,
+                resolved_by="system:delivery_revoked",
+                resolved_at=now,
+            )
+        )
+        self._session.flush()
+
+def _document_to_domain(orm: DocumentORM) -> Document:
+    return Document(
+        id=orm.id,
+        origin_issuer=orm.origin_issuer,
+        origin_number=orm.origin_number,
+        edition=orm.edition,
+        part=orm.part,
+        work_id=orm.work_id,
+        created_via_delivery_id=orm.created_via_delivery_id,
+        created_at=orm.created_at,
+        retired_at=orm.retired_at,
+    )
+
+def _designation_to_domain(orm: DocumentDesignationORM) -> DocumentDesignation:
+    return DocumentDesignation(
+        id=orm.id,
+        document_id=orm.document_id,
+        issuer=orm.issuer,
+        designation=orm.designation,
+        language=orm.language,
+        edition=orm.edition,
+        is_primary=orm.is_primary,
+        delivery_id=orm.delivery_id,
+    )
+
+def _title_to_domain(orm: DocumentTitleORM) -> DocumentTitle:
+    return DocumentTitle(
+        id=orm.id,
+        document_id=orm.document_id,
+        language=orm.language,
+        title=orm.title,
+        delivery_id=orm.delivery_id,
+    )
+
+class PostgresDocumentRepository(DocumentRepository):
+    def __init__(self, session: Session):
+        self._session = session
+
+    def create_document(
+        self,
+        *,
+        origin_issuer: str,
+        origin_number: str,
+        edition: str,
+        part: str | None,
+        delivery_id: uuid.UUID,
+        work_id: uuid.UUID | None = None,
+    ) -> Document:
+        _require_active_delivery(self._session, delivery_id)
+        if work_id is None:
+            work = WorkORM(id=uuid.uuid4(), status=WorkStatus.ACTIVE, created_via=WorkCreatedVia.AUTO_MATCHED)
+            self._session.add(work)
+            self._session.flush()
+            work_id = work.id
+        orm = DocumentORM(
+            id=uuid.uuid4(),
+            origin_issuer=origin_issuer,
+            origin_number=origin_number,
+            edition=edition,
+            part=part,
+            work_id=work_id,
+            created_via_delivery_id=delivery_id,
+        )
+        self._session.add(orm)
+        self._session.flush()
+        self._session.refresh(orm)
+        return _document_to_domain(orm)
+
+    def get_document_unchecked(self, document_id: uuid.UUID) -> Document | None:
+        orm = self._session.get(DocumentORM, document_id)
+        return _document_to_domain(orm) if orm else None
+
+    def list_documents_for_work_unchecked(self, work_id: uuid.UUID) -> list[Document]:
+        """
+        Every Document belonging to `work_id`, regardless of rights
+        classification or jurisdiction. Internal/administrative use only
+        (notify-watchers, Task 6) -- never callable from an HTTP endpoint.
+        """
+        rows = self._session.execute(
+            select(DocumentORM).where(DocumentORM.work_id == work_id)
+        ).scalars()
+        return [_document_to_domain(row) for row in rows]
+
+    def documents_for_works_unchecked(
+        self, work_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, list[Document]]:
+        """
+        Every Document (retired ones, i.e. tombstones, included) of each work,
+        grouped by work id. Ungated by rights classification on purpose: the
+        personal-data export reads it only to print the identifiers (issuer,
+        number, edition, part) of works the account holder watches -- never
+        content. Not for any content-serving path.
+        """
+        if not work_ids:
+            return {}
+        rows = self._session.execute(
+            select(DocumentORM)
+            .where(DocumentORM.work_id.in_(work_ids))
+            .order_by(
+                DocumentORM.origin_issuer, DocumentORM.origin_number,
+                DocumentORM.edition, DocumentORM.part, DocumentORM.id,
+            )
+        ).scalars()
+        grouped: dict[uuid.UUID, list[Document]] = {}
+        for row in rows:
+            grouped.setdefault(row.work_id, []).append(_document_to_domain(row))
+        return grouped
+
+    def documents_by_ids_unchecked(
+        self, document_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, Document]:
+        """
+        Documents (tombstones included) by id. Ungated by rights
+        classification on purpose: the personal-data export reads it only to
+        print the readable identifiers of documents the account holder's own
+        chat messages cited -- never content. Not for any content-serving path.
+        """
+        if not document_ids:
+            return {}
+        rows = self._session.execute(
+            select(DocumentORM).where(DocumentORM.id.in_(document_ids))
+        ).scalars()
+        return {row.id: _document_to_domain(row) for row in rows}
+
+    def add_designation(
+        self,
+        *,
+        document_id: uuid.UUID,
+        issuer: str,
+        designation: str,
+        language: str,
+        edition: str | None,
+        is_primary: bool,
+        delivery_id: uuid.UUID,
+    ) -> DocumentDesignation:
+        _require_active_delivery(self._session, delivery_id)
+        # The dedupe key includes document_id, even though
+        # uq_designation_issuer_designation_edition scopes on (issuer,
+        # designation, edition) rather than document_id. That constraint
+        # deliberately still collapses to "one node worldwide" for a given
+        # (issuer, designation) when edition is NULL on both sides -- e.g.
+        # EUR-Lex, BAuA, and DGUV publications with no parseable issue date --
+        # but distinct editions of the same designation are meant to coexist
+        # as separate documents. Filtering the pre-check on (issuer,
+        # designation) alone would silently hand back another document's row
+        # (whether a same-edition duplicate or a different edition entirely);
+        # with document_id in the key, a genuine collision instead reaches the
+        # constraint and surfaces as an IntegrityError — an identity-resolution
+        # error, which is what it is.
+        existing = self._session.execute(
+            select(DocumentDesignationORM).where(
+                DocumentDesignationORM.document_id == document_id,
+                DocumentDesignationORM.issuer == issuer,
+                DocumentDesignationORM.designation == designation,
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return _designation_to_domain(existing)
+
+        orm = DocumentDesignationORM(
+            id=uuid.uuid4(),
+            document_id=document_id,
+            issuer=issuer,
+            designation=designation,
+            language=language,
+            edition=edition,
+            is_primary=is_primary,
+            delivery_id=delivery_id,
+        )
+        try:
+            with self._session.begin_nested():
+                self._session.add(orm)
+                self._session.flush()
+        except IntegrityError:
+            existing = self._session.execute(
+                select(DocumentDesignationORM).where(
+                    DocumentDesignationORM.document_id == document_id,
+                    DocumentDesignationORM.issuer == issuer,
+                    DocumentDesignationORM.designation == designation,
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                raise
+            return _designation_to_domain(existing)
+        return _designation_to_domain(orm)
+
+    def add_title(
+        self, *, document_id: uuid.UUID, language: str, title: str, delivery_id: uuid.UUID
+    ) -> DocumentTitle:
+        _require_active_delivery(self._session, delivery_id)
+        existing = self._session.execute(
+            select(DocumentTitleORM).where(
+                DocumentTitleORM.document_id == document_id,
+                DocumentTitleORM.language == language,
+                DocumentTitleORM.title == title,
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return _title_to_domain(existing)
+
+        orm = DocumentTitleORM(
+            id=uuid.uuid4(),
+            document_id=document_id,
+            language=language,
+            title=title,
+            delivery_id=delivery_id,
+        )
+        try:
+            with self._session.begin_nested():
+                self._session.add(orm)
+                self._session.flush()
+        except IntegrityError:
+            existing = self._session.execute(
+                select(DocumentTitleORM).where(
+                    DocumentTitleORM.document_id == document_id,
+                    DocumentTitleORM.language == language,
+                    DocumentTitleORM.title == title,
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                raise
+            return _title_to_domain(existing)
+        return _title_to_domain(orm)
+
+    def list_designations(self, document_id: uuid.UUID) -> list[DocumentDesignation]:
+        # Ordered by the ingestion time of the delivery each row came from,
+        # not by id: id is a random uuid4, so sorting on it is not sorting on
+        # anything -- callers (e.g. "the primary designation" tie-breaking, or
+        # document_embedding.build_document_embedding_text's "first title")
+        # need a stable, meaningful order, and ingested_at is the one
+        # deterministic signal every row carries via its delivery.
+        rows = self._session.execute(
+            select(DocumentDesignationORM)
+            .join(DeliveryORM, DeliveryORM.id == DocumentDesignationORM.delivery_id)
+            .where(DocumentDesignationORM.document_id == document_id)
+            .order_by(DeliveryORM.ingested_at, DocumentDesignationORM.id)
+        ).scalars()
+        return [_designation_to_domain(row) for row in rows]
+
+    def list_titles(self, document_id: uuid.UUID) -> list[DocumentTitle]:
+        rows = self._session.execute(
+            select(DocumentTitleORM)
+            .join(DeliveryORM, DeliveryORM.id == DocumentTitleORM.delivery_id)
+            .where(DocumentTitleORM.document_id == document_id)
+            .order_by(DeliveryORM.ingested_at, DocumentTitleORM.id)
+        ).scalars()
+        return [_title_to_domain(row) for row in rows]
+
+    def get_document_for_jurisdiction(
+        self, document_id: uuid.UUID, jurisdiction: str
+    ) -> Document | None:
+        orm = self._session.execute(
+            select(DocumentORM)
+            .join(
+                RightsClassificationORM,
+                RightsClassificationORM.document_id == DocumentORM.id,
+            )
+            .where(
+                DocumentORM.id == document_id,
+                RightsClassificationORM.jurisdiction == jurisdiction,
+                RightsClassificationORM.may_process.is_(True),
+                RightsClassificationORM.revoked_at.is_(None),
+            )
+        ).scalar_one_or_none()
+        return _document_to_domain(orm) if orm else None
+
+    def list_documents_for_jurisdiction(self, jurisdiction: str) -> list[Document]:
+        rows = self._session.execute(
+            select(DocumentORM)
+            .join(
+                RightsClassificationORM,
+                RightsClassificationORM.document_id == DocumentORM.id,
+            )
+            .where(
+                RightsClassificationORM.jurisdiction == jurisdiction,
+                RightsClassificationORM.may_process.is_(True),
+                RightsClassificationORM.revoked_at.is_(None),
+            )
+            .order_by(DocumentORM.id)
+        ).scalars()
+        return [_document_to_domain(row) for row in rows]
+
+    def list_exportable_documents_for_jurisdiction(self, jurisdiction: str) -> list[Document]:
+        rows = self._session.execute(
+            select(DocumentORM)
+            .join(
+                RightsClassificationORM,
+                RightsClassificationORM.document_id == DocumentORM.id,
+            )
+            .where(
+                RightsClassificationORM.jurisdiction == jurisdiction,
+                RightsClassificationORM.may_process.is_(True),
+                RightsClassificationORM.may_export_free.is_(True),
+                RightsClassificationORM.revoked_at.is_(None),
+            )
+            .order_by(DocumentORM.id)
+        ).scalars()
+        return [_document_to_domain(row) for row in rows]
+
+    def find_by_designation(
+        self, issuer: str, designation: str, edition: str | None = None
+    ) -> Document | None:
+        query = (
+            select(DocumentORM)
+            .join(
+                DocumentDesignationORM,
+                DocumentDesignationORM.document_id == DocumentORM.id,
+            )
+            .where(
+                DocumentDesignationORM.issuer == issuer,
+                DocumentDesignationORM.designation == designation,
+            )
+        )
+        if edition is not None:
+            query = query.where(DocumentDesignationORM.edition == edition)
+            orm = self._session.execute(query).scalar_one_or_none()
+        else:
+            # Without a specific edition, several DocumentDesignation rows can
+            # now legitimately share (issuer, designation) -- one per edition
+            # (see migration 0026). The caller gets the most recent one
+            # deterministically, rather than an ambiguous match; a
+            # single-edition designation (the common case today, and the
+            # only case for EUR-Lex/BAuA) still returns its one match exactly
+            # as before.
+            #
+            # DocumentORM.id is a secondary sort key purely for reproducible
+            # tie-breaking, not semantic "newness" -- Postgres's now() is
+            # transaction-scoped, so two documents created in the same
+            # transaction (e.g. a bulk backfill) can get a byte-identical
+            # created_at. Without a secondary key, ORDER BY created_at DESC
+            # alone gives no guarantee which row comes back on a tie, and a
+            # different, physically arbitrary row could be returned across
+            # runs -- which matters here because downstream callers (e.g.
+            # REPLACES-edge creation) build graph edges on this result.
+            orm = self._session.execute(
+                query.order_by(DocumentORM.created_at.desc(), DocumentORM.id.desc()).limit(1)
+            ).scalar_one_or_none()
+        return _document_to_domain(orm) if orm else None
+
+    def find_previous_edition(
+        self, issuer: str, designation: str, before_edition: str
+    ) -> Document | None:
+        # Unlike find_by_designation's edition-less fallback (which answers
+        # "most recently INSERTED"), this answers "the greatest edition
+        # value strictly less than before_edition" -- the actual predecessor
+        # in edition order, regardless of ingestion order. Out-of-order
+        # ingestion (e.g. a 2013 archive arriving after its 2022 successor
+        # is already known) or same-transaction batches (where created_at
+        # ties are common) must not produce an inverted or nondeterministic
+        # REPLACES edge -- see the final-review finding this method fixes.
+        #
+        # ASSUMPTION this method relies on: `edition` strings are
+        # lexicographically sortable in an order that matches their real
+        # chronological order (a plain `<` comparison, below). This is true
+        # today only because the sole producer of this field, the DGUV
+        # adapter's _normalise_issue_date() (core/src/normly_core/pipeline/
+        # adapters/dguv.py), always emits ISO-8601 `YYYY-MM-DD` strings,
+        # where lexicographic and chronological order coincide. Neither
+        # eur_lex.py nor baua.py ever sets `edition`. A future adapter that
+        # sets `edition` in a different, non-ISO-8601-sortable format would
+        # silently break this method's correctness -- no error would be
+        # raised, `find_previous_edition` would simply return the wrong
+        # document as "the predecessor." See also the matching note on
+        # DocumentDesignation.edition in domain.py.
+        orm = self._session.execute(
+            select(DocumentORM)
+            .join(
+                DocumentDesignationORM,
+                DocumentDesignationORM.document_id == DocumentORM.id,
+            )
+            .where(
+                DocumentDesignationORM.issuer == issuer,
+                DocumentDesignationORM.designation == designation,
+                DocumentDesignationORM.edition.is_not(None),
+                DocumentDesignationORM.edition < before_edition,
+            )
+            .order_by(DocumentDesignationORM.edition.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        return _document_to_domain(orm) if orm else None
+
+    def search_documents_for_jurisdiction(
+        self, jurisdiction: str, *, q: str | None = None, issuer: str | None = None,
+        limit: int = 20, offset: int = 0,
+    ) -> tuple[list[Document], int]:
+        base = (
+            select(DocumentORM)
+            .join(
+                RightsClassificationORM,
+                RightsClassificationORM.document_id == DocumentORM.id,
+            )
+            .where(
+                RightsClassificationORM.jurisdiction == jurisdiction,
+                RightsClassificationORM.may_process.is_(True),
+                RightsClassificationORM.revoked_at.is_(None),
+            )
+        )
+
+        if q is not None or issuer is not None:
+            # A document can have several designations, so this join can
+            # multiply rows -- distinct() below dedupes by DocumentORM's
+            # full column set (id is the primary key among them), which is
+            # equivalent to per-document dedup here.
+            base = base.join(
+                DocumentDesignationORM,
+                DocumentDesignationORM.document_id == DocumentORM.id,
+            )
+            if q is not None:
+                pattern = f"%{_escape_like(q)}%"
+                base = base.where(
+                    sa.or_(
+                        DocumentDesignationORM.designation.ilike(pattern, escape="\\"),
+                        DocumentORM.id.in_(
+                            select(DocumentTitleORM.document_id).where(
+                                DocumentTitleORM.title.ilike(pattern, escape="\\")
+                            )
+                        ),
+                    )
+                )
+            if issuer is not None:
+                base = base.where(DocumentDesignationORM.issuer == issuer)
+            base = base.distinct()
+
+        total = self._session.execute(
+            select(sa.func.count()).select_from(base.subquery())
+        ).scalar_one()
+
+        rows = self._session.execute(
+            base.order_by(DocumentORM.id).limit(limit).offset(offset)
+        ).scalars()
+        return [_document_to_domain(row) for row in rows], total
+
+    def search_works_for_jurisdiction(
+        self, jurisdiction: str, *, q: str | None = None, issuer: str | None = None,
+        query_vector: list[float] | None = None, embedding_model_name: str | None = None,
+        limit: int = 20, offset: int = 0,
+    ) -> tuple[list[WorkSearchHit], int]:
+        tier1_documents, _ = self.search_documents_for_jurisdiction(
+            jurisdiction, q=q, issuer=issuer, limit=_TIER1_CANDIDATE_POOL, offset=0,
+        )
+        # search_documents_for_jurisdiction orders by DocumentORM.id (a random
+        # uuid4) -- fine for that method's own contract, but meaningless as a
+        # tie-break for "which edition of a Work represents it in search
+        # results." Re-sort by created_at (newest first) here, locally, so
+        # Work-deduplication below picks the most recently created document as
+        # best_match, not an arbitrary one. Scoped to this method only --
+        # does not change search_documents_for_jurisdiction itself or any of
+        # its other callers/tests.
+        tier1_documents = sorted(
+            tier1_documents, key=lambda document: document.created_at, reverse=True
+        )
+        ordered_documents = list(tier1_documents)
+        seen_document_ids = {document.id for document in ordered_documents}
+
+        if query_vector is not None and embedding_model_name is not None:
+            tier2_query = (
+                select(DocumentORM)
+                .join(
+                    RightsClassificationORM,
+                    RightsClassificationORM.document_id == DocumentORM.id,
+                )
+                .join(
+                    DocumentEmbeddingORM,
+                    DocumentEmbeddingORM.document_id == DocumentORM.id,
+                )
+                .where(
+                    RightsClassificationORM.jurisdiction == jurisdiction,
+                    RightsClassificationORM.may_process.is_(True),
+                    RightsClassificationORM.revoked_at.is_(None),
+                    DocumentEmbeddingORM.model_name == embedding_model_name,
+                    DocumentEmbeddingORM.vector.cosine_distance(query_vector)
+                    <= _DOCUMENT_SEARCH_MAX_COSINE_DISTANCE,
+                )
+            )
+            if issuer is not None:
+                # Mirrors search_documents_for_jurisdiction's own issuer
+                # handling. Unlike that method, no distinct() is needed here:
+                # a document with several designations from the same issuer
+                # can produce duplicate rows from this join, but the
+                # "if row.id in seen_document_ids" check below already
+                # collapses those back to a single entry -- and unlike Tier
+                # 1's plain equality ORDER BY DocumentORM.id, this query
+                # orders by a cosine-distance expression that isn't in the
+                # select list, which Postgres's SELECT DISTINCT disallows.
+                tier2_query = tier2_query.join(
+                    DocumentDesignationORM,
+                    DocumentDesignationORM.document_id == DocumentORM.id,
+                ).where(DocumentDesignationORM.issuer == issuer)
+            rows = self._session.execute(
+                tier2_query.order_by(
+                    DocumentEmbeddingORM.vector.cosine_distance(query_vector)
+                ).limit(_SEMANTIC_CANDIDATE_POOL)
+            ).scalars()
+            for row in rows:
+                if row.id in seen_document_ids:
+                    continue
+                seen_document_ids.add(row.id)
+                ordered_documents.append(_document_to_domain(row))
+
+        seen_work_ids: set[uuid.UUID] = set()
+        grouped: list[Document] = []
+        for document in ordered_documents:
+            if document.work_id in seen_work_ids:
+                continue
+            seen_work_ids.add(document.work_id)
+            grouped.append(document)
+
+        total = len(grouped)
+        page = grouped[offset:offset + limit]
+        if not page:
+            return [], total
+
+        edition_counts = dict(
+            self._session.execute(
+                select(DocumentORM.work_id, sa.func.count())
+                .join(
+                    RightsClassificationORM,
+                    RightsClassificationORM.document_id == DocumentORM.id,
+                )
+                .where(
+                    DocumentORM.work_id.in_([document.work_id for document in page]),
+                    RightsClassificationORM.jurisdiction == jurisdiction,
+                    RightsClassificationORM.may_process.is_(True),
+                    RightsClassificationORM.revoked_at.is_(None),
+                )
+                .group_by(DocumentORM.work_id)
+            ).all()
+        )
+        return [
+            WorkSearchHit(
+                work_id=document.work_id, best_match=document,
+                other_editions_count=edition_counts[document.work_id] - 1,
+            )
+            for document in page
+        ], total
+
+def _work_to_domain(orm: WorkORM) -> Work:
+    return Work(
+        id=orm.id,
+        status=orm.status,
+        merged_into_work_id=orm.merged_into_work_id,
+        created_via=orm.created_via,
+        created_at=orm.created_at,
+    )
+
+class PostgresWorkRepository(WorkRepository):
+    def __init__(self, session: Session):
+        self._session = session
+
+    def create_work(self, *, created_via: WorkCreatedVia) -> Work:
+        orm = WorkORM(id=uuid.uuid4(), status=WorkStatus.ACTIVE, created_via=created_via)
+        self._session.add(orm)
+        self._session.flush()
+        self._session.refresh(orm)
+        return _work_to_domain(orm)
+
+    def get_work(self, work_id: uuid.UUID) -> Work | None:
+        orm = self._session.get(WorkORM, work_id)
+        if orm is None:
+            return None
+        if orm.status == WorkStatus.MERGED and orm.merged_into_work_id is not None:
+            orm = self._session.get(WorkORM, orm.merged_into_work_id)
+        return _work_to_domain(orm)
+
+def _rights_to_domain(orm: RightsClassificationORM) -> RightsClassification:
+    return RightsClassification(
+        document_id=orm.document_id,
+        jurisdiction=orm.jurisdiction,
+        may_process=orm.may_process,
+        may_index_fulltext=orm.may_index_fulltext,
+        may_cite_passages=orm.may_cite_passages,
+        may_export_free=orm.may_export_free,
+        legal_basis_reference=orm.legal_basis_reference,
+        classified_at=orm.classified_at,
+        classified_by=orm.classified_by,
+        delivery_id=orm.delivery_id,
+        revoked_at=orm.revoked_at,
+    )
+
+class PostgresRightsRepository(RightsRepository):
+    def __init__(self, session: Session):
+        self._session = session
+
+    def classify(
+        self,
+        *,
+        document_id: uuid.UUID,
+        jurisdiction: str,
+        may_process: bool,
+        may_index_fulltext: bool,
+        may_cite_passages: bool,
+        may_export_free: bool,
+        legal_basis_reference: str,
+        classified_at: datetime,
+        classified_by: str,
+        delivery_id: uuid.UUID,
+    ) -> RightsClassification:
+        _require_active_delivery(self._session, delivery_id)
+        orm = RightsClassificationORM(
+            document_id=document_id,
+            jurisdiction=jurisdiction,
+            may_process=may_process,
+            may_index_fulltext=may_index_fulltext,
+            may_cite_passages=may_cite_passages,
+            may_export_free=may_export_free,
+            legal_basis_reference=legal_basis_reference,
+            classified_at=classified_at,
+            classified_by=classified_by,
+            delivery_id=delivery_id,
+            revoked_at=None,
+        )
+        merged = self._session.merge(orm)
+        self._session.flush()
+        return _rights_to_domain(merged)
+
+    def get_classification(
+        self, document_id: uuid.UUID, jurisdiction: str
+    ) -> RightsClassification | None:
+        orm = self._session.get(RightsClassificationORM, (document_id, jurisdiction))
+        return _rights_to_domain(orm) if orm else None
+
+    def list_classifications_for_document_unchecked(
+        self, document_id: uuid.UUID
+    ) -> list[RightsClassification]:
+        """
+        Every classification row for `document_id`, one per jurisdiction ever
+        classified, regardless of revoked_at. Internal/administrative use
+        only (notify-watchers, Task 6) -- never callable from an HTTP
+        endpoint.
+        """
+        rows = self._session.execute(
+            select(RightsClassificationORM).where(
+                RightsClassificationORM.document_id == document_id
+            )
+        ).scalars()
+        return [_rights_to_domain(row) for row in rows]
+
+def _edge_to_domain(orm: EdgeORM) -> Edge:
+    return Edge(
+        id=orm.id,
+        from_document_id=orm.from_document_id,
+        to_document_id=orm.to_document_id,
+        edge_type=orm.edge_type,
+        jurisdiction=orm.jurisdiction,
+        layer=orm.layer,
+        delivery_id=orm.delivery_id,
+        revoked_at=orm.revoked_at,
+        created_at=orm.created_at,
+    )
+
+def _active_edge_query(
+    from_document_id: uuid.UUID,
+    to_document_id: uuid.UUID,
+    edge_type: EdgeType,
+    jurisdiction: str | None,
+):
+    """
+    Select the one active edge the partial unique index
+    ``uq_edge_active_from_to_type_jurisdiction`` allows for this tuple.
+
+    The index keys on ``coalesce(jurisdiction, '')`` where ``revoked_at IS
+    NULL``, so a NULL jurisdiction and an empty one are the same key here too.
+    """
+    return select(EdgeORM).where(
+        EdgeORM.from_document_id == from_document_id,
+        EdgeORM.to_document_id == to_document_id,
+        EdgeORM.edge_type == edge_type,
+        sa.func.coalesce(EdgeORM.jurisdiction, "") == (jurisdiction or ""),
+        EdgeORM.revoked_at.is_(None),
+    )
+
+def _work_structure_entry_to_domain(
+    document: DocumentORM, designation: str | None, status: str
+) -> WorkStructureEntry:
+    return WorkStructureEntry(
+        document_id=document.id, origin_issuer=document.origin_issuer,
+        origin_number=document.origin_number, edition=document.edition,
+        designation=designation, status=status,
+    )
+
+class PostgresEdgeRepository(EdgeRepository):
+    def __init__(self, session: Session):
+        self._session = session
+
+    def create_edge(
+        self,
+        *,
+        from_document_id: uuid.UUID,
+        to_document_id: uuid.UUID,
+        edge_type: EdgeType,
+        jurisdiction: str | None,
+        layer: Layer,
+        delivery_id: uuid.UUID,
+    ) -> Edge:
+        _require_active_delivery(self._session, delivery_id)
+        query = _active_edge_query(
+            from_document_id, to_document_id, edge_type, jurisdiction
+        )
+        existing = self._session.execute(query).scalar_one_or_none()
+        if existing is not None:
+            return _edge_to_domain(existing)
+
+        orm = EdgeORM(
+            id=uuid.uuid4(),
+            from_document_id=from_document_id,
+            to_document_id=to_document_id,
+            edge_type=edge_type,
+            jurisdiction=jurisdiction,
+            layer=layer,
+            delivery_id=delivery_id,
+            revoked_at=None,
+        )
+        try:
+            with self._session.begin_nested():
+                self._session.add(orm)
+                self._session.flush()
+        except IntegrityError:
+            existing = self._session.execute(query).scalar_one_or_none()
+            if existing is None:
+                raise
+            return _edge_to_domain(existing)
+        self._session.refresh(orm)
+        return _edge_to_domain(orm)
+
+    def list_edges_for_jurisdiction(
+        self, document_id: uuid.UUID, jurisdiction: str
+    ) -> list[Edge]:
+        # Outgoing edges, dual rights-gated, NO layer filter -- COMMERCIAL
+        # edges are returned. Both endpoints must be readable in this
+        # jurisdiction: gating the target alone would still reveal the
+        # source's existence and its reference structure through a
+        # jurisdiction the source is not readable in at all.
+        #
+        # Callers: pipeline/processing code only. Public HTTP endpoints must
+        # use list_free_layer_edges_for_jurisdiction (adds layer == FREE) or,
+        # for the bulk dump, list_exportable_edges_for_jurisdiction.
+        source_rights = aliased(RightsClassificationORM, name="source_rights")
+        target_rights = aliased(RightsClassificationORM, name="target_rights")
+        rows = self._session.execute(
+            select(EdgeORM)
+            .join(source_rights, source_rights.document_id == EdgeORM.from_document_id)
+            .join(target_rights, target_rights.document_id == EdgeORM.to_document_id)
+            .where(
+                EdgeORM.from_document_id == document_id,
+                EdgeORM.revoked_at.is_(None),
+                sa.or_(EdgeORM.jurisdiction.is_(None), EdgeORM.jurisdiction == jurisdiction),
+                source_rights.jurisdiction == jurisdiction,
+                source_rights.may_process.is_(True),
+                source_rights.revoked_at.is_(None),
+                target_rights.jurisdiction == jurisdiction,
+                target_rights.may_process.is_(True),
+                target_rights.revoked_at.is_(None),
+            )
+            .order_by(EdgeORM.id)
+        ).scalars()
+        return [_edge_to_domain(row) for row in rows]
+
+    def list_incoming_edges_for_jurisdiction(
+        self, document_id: uuid.UUID, jurisdiction: str
+    ) -> list[Edge]:
+        # Mirror of list_edges_for_jurisdiction with the direction reversed:
+        # returns edges where document_id is the *target* (to_document_id),
+        # e.g. REPLACES/WITHDRAWN_BY edges a successor or withdrawal-notice
+        # document points at document_id. Same dual rights-gating rationale
+        # applies -- both endpoints must be readable in this jurisdiction --
+        # and, like its outgoing sibling, NO layer filter: COMMERCIAL edges
+        # are returned.
+        #
+        # Callers: pipeline/processing code only. The public validity endpoint
+        # uses list_free_layer_incoming_edges_for_jurisdiction.
+        source_rights = aliased(RightsClassificationORM, name="source_rights")
+        target_rights = aliased(RightsClassificationORM, name="target_rights")
+        rows = self._session.execute(
+            select(EdgeORM)
+            .join(source_rights, source_rights.document_id == EdgeORM.from_document_id)
+            .join(target_rights, target_rights.document_id == EdgeORM.to_document_id)
+            .where(
+                EdgeORM.to_document_id == document_id,
+                EdgeORM.revoked_at.is_(None),
+                sa.or_(EdgeORM.jurisdiction.is_(None), EdgeORM.jurisdiction == jurisdiction),
+                source_rights.jurisdiction == jurisdiction,
+                source_rights.may_process.is_(True),
+                source_rights.revoked_at.is_(None),
+                target_rights.jurisdiction == jurisdiction,
+                target_rights.may_process.is_(True),
+                target_rights.revoked_at.is_(None),
+            )
+            .order_by(EdgeORM.id)
+        ).scalars()
+        return [_edge_to_domain(row) for row in rows]
+
+    def list_incoming_edges_for_work_unchecked(
+        self, document_ids: list[uuid.UUID], edge_types: tuple[EdgeType, ...]
+    ) -> list[Edge]:
+        """
+        Incoming, unrevoked edges of the given types whose to_document_id is
+        one of `document_ids` -- bounded to one Work's own documents, no
+        rights-gating and no layer filter. Internal/administrative use only
+        (notify-watchers, Task 6) -- never callable from an HTTP endpoint;
+        every public read path keeps using the *_for_jurisdiction methods
+        above.
+        """
+        if not document_ids:
+            return []
+        rows = self._session.execute(
+            select(EdgeORM)
+            .where(
+                EdgeORM.to_document_id.in_(document_ids),
+                EdgeORM.edge_type.in_(edge_types),
+                EdgeORM.revoked_at.is_(None),
+            )
+            .order_by(EdgeORM.id)
+        ).scalars()
+        return [_edge_to_domain(row) for row in rows]
+
+    def list_free_layer_edges_for_jurisdiction(
+        self, document_id: uuid.UUID, jurisdiction: str
+    ) -> list[Edge]:
+        # Exactly list_edges_for_jurisdiction plus `layer == Layer.FREE`.
+        # Same outgoing direction, same dual may_process gating, same
+        # ordering; no may_export_free condition.
+        #
+        # Caller: GET /v1/documents/{id}/edges. That endpoint is anonymous and
+        # public, so a COMMERCIAL-layer edge (REQ-GRAPH-002 reserves
+        # section-level references within licensed norms for the paid tier)
+        # must not appear in it. It is deliberately not gated on
+        # may_export_free: whether a document belongs in the bulk dump is a
+        # different, narrower question than whether one of its relationships
+        # is free-tier content.
+        source_rights = aliased(RightsClassificationORM, name="source_rights")
+        target_rights = aliased(RightsClassificationORM, name="target_rights")
+        rows = self._session.execute(
+            select(EdgeORM)
+            .join(source_rights, source_rights.document_id == EdgeORM.from_document_id)
+            .join(target_rights, target_rights.document_id == EdgeORM.to_document_id)
+            .where(
+                EdgeORM.from_document_id == document_id,
+                EdgeORM.layer == Layer.FREE,
+                EdgeORM.revoked_at.is_(None),
+                sa.or_(EdgeORM.jurisdiction.is_(None), EdgeORM.jurisdiction == jurisdiction),
+                source_rights.jurisdiction == jurisdiction,
+                source_rights.may_process.is_(True),
+                source_rights.revoked_at.is_(None),
+                target_rights.jurisdiction == jurisdiction,
+                target_rights.may_process.is_(True),
+                target_rights.revoked_at.is_(None),
+            )
+            .order_by(EdgeORM.id)
+        ).scalars()
+        return [_edge_to_domain(row) for row in rows]
+
+    def list_free_layer_incoming_edges_for_jurisdiction(
+        self, document_id: uuid.UUID, jurisdiction: str
+    ) -> list[Edge]:
+        # Exactly list_incoming_edges_for_jurisdiction plus
+        # `layer == Layer.FREE`; the incoming-direction counterpart of
+        # list_free_layer_edges_for_jurisdiction (see there for the rationale).
+        #
+        # Caller: GET /v1/documents/{id}/validity.
+        source_rights = aliased(RightsClassificationORM, name="source_rights")
+        target_rights = aliased(RightsClassificationORM, name="target_rights")
+        rows = self._session.execute(
+            select(EdgeORM)
+            .join(source_rights, source_rights.document_id == EdgeORM.from_document_id)
+            .join(target_rights, target_rights.document_id == EdgeORM.to_document_id)
+            .where(
+                EdgeORM.to_document_id == document_id,
+                EdgeORM.layer == Layer.FREE,
+                EdgeORM.revoked_at.is_(None),
+                sa.or_(EdgeORM.jurisdiction.is_(None), EdgeORM.jurisdiction == jurisdiction),
+                source_rights.jurisdiction == jurisdiction,
+                source_rights.may_process.is_(True),
+                source_rights.revoked_at.is_(None),
+                target_rights.jurisdiction == jurisdiction,
+                target_rights.may_process.is_(True),
+                target_rights.revoked_at.is_(None),
+            )
+            .order_by(EdgeORM.id)
+        ).scalars()
+        return [_edge_to_domain(row) for row in rows]
+
+    def list_exportable_edges_for_jurisdiction(
+        self, document_id: uuid.UUID, jurisdiction: str
+    ) -> list[Edge]:
+        # The strictest of the four listings: list_edges_for_jurisdiction plus
+        # `layer == Layer.FREE` plus may_export_free on BOTH endpoints. It is
+        # the only one that consults may_export_free.
+        #
+        # Layer.COMMERCIAL edges (e.g. section-level references reserved for
+        # the commercial layer) stay excluded here, as they do in
+        # list_free_layer_edges_for_jurisdiction; the unfiltered
+        # list_edges_for_jurisdiction still returns them for processing use.
+        # Requiring may_export_free on BOTH aliases (not just the source)
+        # keeps this method self-contained: any edge it returns has both
+        # endpoints exportable, so a caller iterating only exportable
+        # documents never ends up with a dangling to_document_id reference in
+        # the export.
+        #
+        # Caller: GET /v1/export. Single-document endpoints must NOT use this
+        # -- may_export_free would over-restrict them.
+        source_rights = aliased(RightsClassificationORM, name="source_rights")
+        target_rights = aliased(RightsClassificationORM, name="target_rights")
+        rows = self._session.execute(
+            select(EdgeORM)
+            .join(source_rights, source_rights.document_id == EdgeORM.from_document_id)
+            .join(target_rights, target_rights.document_id == EdgeORM.to_document_id)
+            .where(
+                EdgeORM.from_document_id == document_id,
+                EdgeORM.layer == Layer.FREE,
+                EdgeORM.revoked_at.is_(None),
+                sa.or_(EdgeORM.jurisdiction.is_(None), EdgeORM.jurisdiction == jurisdiction),
+                source_rights.jurisdiction == jurisdiction,
+                source_rights.may_process.is_(True),
+                source_rights.may_export_free.is_(True),
+                source_rights.revoked_at.is_(None),
+                target_rights.jurisdiction == jurisdiction,
+                target_rights.may_process.is_(True),
+                target_rights.may_export_free.is_(True),
+                target_rights.revoked_at.is_(None),
+            )
+            .order_by(EdgeORM.id)
+        ).scalars()
+        return [_edge_to_domain(row) for row in rows]
+
+    def get_work_structure_for_jurisdiction(
+        self, document_id: uuid.UUID, jurisdiction: str
+    ) -> WorkStructure | None:
+        viewed = self._session.execute(
+            select(DocumentORM)
+            .join(RightsClassificationORM, RightsClassificationORM.document_id == DocumentORM.id)
+            .where(
+                DocumentORM.id == document_id,
+                RightsClassificationORM.jurisdiction == jurisdiction,
+                RightsClassificationORM.may_process.is_(True),
+                RightsClassificationORM.revoked_at.is_(None),
+            )
+        ).scalar_one_or_none()
+        if viewed is None:
+            return None
+
+        work_documents = list(self._session.execute(
+            select(DocumentORM)
+            .join(RightsClassificationORM, RightsClassificationORM.document_id == DocumentORM.id)
+            .where(
+                DocumentORM.work_id == viewed.work_id,
+                RightsClassificationORM.jurisdiction == jurisdiction,
+                RightsClassificationORM.may_process.is_(True),
+                RightsClassificationORM.revoked_at.is_(None),
+            )
+            .order_by(DocumentORM.edition, DocumentORM.id)
+        ).scalars())
+        document_ids = [d.id for d in work_documents]
+
+        # `document_id` alone in its (visible) Work -- no other member to
+        # form a chain or an adoption with, so both lists are empty rather
+        # than a single-entry `editions` containing just itself.
+        if len(work_documents) <= 1:
+            return WorkStructure(work_id=viewed.work_id, editions=[], national_adoptions=[])
+
+        # One-time, bounded traversal over THIS Work's own documents/edges
+        # only -- not a pattern for wider application code (ADR-006 keeps
+        # graph queries shallow); bounded by the Work grouping itself.
+        # layer == FREE plus the jurisdiction OR-clause matches the same
+        # filters list_free_layer_incoming_edges_for_jurisdiction already
+        # applies to these same edge types for GET .../validity --
+        # pre-existing behavior, kept consistent here rather than resolved
+        # differently for a new endpoint.
+        edges = list(self._session.execute(
+            select(EdgeORM)
+            .where(
+                EdgeORM.edge_type.in_(_WORK_STRUCTURE_EDGE_TYPES),
+                EdgeORM.from_document_id.in_(document_ids),
+                EdgeORM.to_document_id.in_(document_ids),
+                EdgeORM.revoked_at.is_(None),
+                EdgeORM.layer == Layer.FREE,
+                sa.or_(EdgeORM.jurisdiction.is_(None), EdgeORM.jurisdiction == jurisdiction),
+            )
+        ).scalars())
+
+        parent = {d.id: d.id for d in work_documents}
+
+        def find(x: uuid.UUID) -> uuid.UUID:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a: uuid.UUID, b: uuid.UUID) -> None:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+
+        for edge in edges:
+            if edge.edge_type in _EDITION_CHAIN_EDGE_TYPES:
+                union(edge.from_document_id, edge.to_document_id)
+
+        edition_root = find(document_id)
+        edition_ids = {d.id for d in work_documents if find(d.id) == edition_root}
+        # `document_id`'s only Work sibling(s) came in via ADOPTED_FROM, with
+        # no REPLACES/WITHDRAWN_BY edge to form an edition chain -- same
+        # rationale as the whole-Work case above, applied at the partition
+        # level: no other member to form a chain with, so `editions` is
+        # empty rather than a single-entry list containing just itself.
+        if len(edition_ids) <= 1:
+            edition_ids = set()
+
+        replaced_ids = {e.to_document_id for e in edges if e.edge_type == EdgeType.REPLACES}
+        withdrawn_ids = {e.to_document_id for e in edges if e.edge_type == EdgeType.WITHDRAWN_BY}
+
+        def status_for(doc_id: uuid.UUID) -> str:
+            if doc_id in replaced_ids:
+                return "replaced"
+            if doc_id in withdrawn_ids:
+                return "withdrawn"
+            return "valid"
+
+        designations_by_document = dict(self._session.execute(
+            select(DocumentDesignationORM.document_id, DocumentDesignationORM.designation)
+            .where(
+                DocumentDesignationORM.document_id.in_(document_ids),
+                DocumentDesignationORM.is_primary.is_(True),
+            )
+        ).all())
+
+        editions = [
+            _work_structure_entry_to_domain(
+                d, designations_by_document.get(d.id), status_for(d.id)
+            )
+            for d in work_documents if d.id in edition_ids
+        ]
+        national_adoptions = [
+            _work_structure_entry_to_domain(
+                d, designations_by_document.get(d.id), status_for(d.id)
+            )
+            for d in work_documents if d.id not in edition_ids
+        ]
+
+        return WorkStructure(
+            work_id=viewed.work_id, editions=editions, national_adoptions=national_adoptions,
+        )
+
+def _segment_to_domain(orm: SegmentORM) -> Segment:
+    return Segment(
+        id=orm.id,
+        document_id=orm.document_id,
+        delivery_id=orm.delivery_id,
+        sequence_number=orm.sequence_number,
+        heading=orm.heading,
+        text=orm.text,
+        language=orm.language,
+        created_at=orm.created_at,
+    )
+
+_CHAT_SEGMENT_MAX_COSINE_DISTANCE = 0.75
+
+class PostgresSegmentRepository(SegmentRepository):
+    def __init__(self, session: Session):
+        self._session = session
+
+    def add_segment(
+        self,
+        *,
+        document_id: uuid.UUID,
+        delivery_id: uuid.UUID,
+        sequence_number: int,
+        heading: str | None,
+        text: str,
+        language: str,
+    ) -> tuple[Segment, bool]:
+        _require_active_delivery(self._session, delivery_id)
+
+        # The dedupe key is delivery-scoped, matching
+        # uq_segment_document_delivery_sequence: re-running one delivery must
+        # not duplicate its segments, but a *second* delivery of the same
+        # document — an amended text — owns its own segment rows. Keyed on
+        # (document_id, sequence_number) alone, the second delivery would be
+        # handed the first one's stale text, and revoking the first delivery
+        # would delete a segment the second one believes it owns.
+        query = select(SegmentORM).where(
+            SegmentORM.document_id == document_id,
+            SegmentORM.delivery_id == delivery_id,
+            SegmentORM.sequence_number == sequence_number,
+        )
+        existing = self._session.execute(query).scalar_one_or_none()
+        if existing is not None:
+            return _segment_to_domain(existing), False
+
+        orm = SegmentORM(
+            id=uuid.uuid4(),
+            document_id=document_id,
+            delivery_id=delivery_id,
+            sequence_number=sequence_number,
+            heading=heading,
+            text=text,
+            language=language,
+        )
+        try:
+            with self._session.begin_nested():
+                self._session.add(orm)
+                self._session.flush()
+        except IntegrityError:
+            existing = self._session.execute(query).scalar_one_or_none()
+            if existing is None:
+                raise
+            return _segment_to_domain(existing), False
+        return _segment_to_domain(orm), True
+
+    def list_segments_for_jurisdiction(
+        self, document_id: uuid.UUID, jurisdiction: str
+    ) -> list[Segment]:
+        # The read gate must ask the same question the write gate asked: the
+        # pipeline only creates segments when `may_index_fulltext` is true.
+        # Classification is updated in place, so a document whose rights are
+        # later tightened would otherwise keep serving full-text segments
+        # written while they were still permitted.
+        rows = self._session.execute(
+            select(SegmentORM)
+            .join(
+                RightsClassificationORM,
+                RightsClassificationORM.document_id == SegmentORM.document_id,
+            )
+            .where(
+                SegmentORM.document_id == document_id,
+                RightsClassificationORM.jurisdiction == jurisdiction,
+                RightsClassificationORM.may_process.is_(True),
+                RightsClassificationORM.may_index_fulltext.is_(True),
+                RightsClassificationORM.revoked_at.is_(None),
+            )
+            .order_by(SegmentORM.sequence_number)
+        ).scalars()
+        return [_segment_to_domain(row) for row in rows]
+
+    def list_citable_segments_for_jurisdiction(
+        self, document_id: uuid.UUID, jurisdiction: str
+    ) -> list[Segment]:
+        # Showing a passage to a reader is a stricter question than indexing
+        # it for search: EUR-Lex texts, for example, are indexable but not
+        # citable. may_index_fulltext stays in the gate because segments only
+        # exist where indexing was permitted when they were written.
+        rows = self._session.execute(
+            select(SegmentORM)
+            .join(
+                RightsClassificationORM,
+                RightsClassificationORM.document_id == SegmentORM.document_id,
+            )
+            .where(
+                SegmentORM.document_id == document_id,
+                RightsClassificationORM.jurisdiction == jurisdiction,
+                RightsClassificationORM.may_process.is_(True),
+                RightsClassificationORM.may_index_fulltext.is_(True),
+                RightsClassificationORM.may_cite_passages.is_(True),
+                RightsClassificationORM.revoked_at.is_(None),
+            )
+            .order_by(SegmentORM.sequence_number)
+        ).scalars()
+        return [_segment_to_domain(row) for row in rows]
+
+    def list_segment_headings_for_jurisdiction(
+        self, segment_ids: list[uuid.UUID], jurisdiction: str
+    ) -> dict[uuid.UUID, str | None]:
+        # Same read gate as list_segments_for_jurisdiction: chat citations
+        # point at segments that synthesis read under exactly this gate.
+        if not segment_ids:
+            return {}
+        rows = self._session.execute(
+            select(SegmentORM.id, SegmentORM.heading)
+            .join(
+                RightsClassificationORM,
+                RightsClassificationORM.document_id == SegmentORM.document_id,
+            )
+            .where(
+                SegmentORM.id.in_(segment_ids),
+                RightsClassificationORM.jurisdiction == jurisdiction,
+                RightsClassificationORM.may_process.is_(True),
+                RightsClassificationORM.may_index_fulltext.is_(True),
+                RightsClassificationORM.revoked_at.is_(None),
+            )
+        ).all()
+        return {segment_id: heading for segment_id, heading in rows}
+
+    def find_similar_segments_for_jurisdiction(
+        self, query_vector: list[float], jurisdiction: str, model_name: str, limit: int = 5,
+    ) -> list[Segment]:
+        # Same read gate as list_segments_for_jurisdiction (may_process AND
+        # may_index_fulltext AND not revoked) -- similarity search is a
+        # different sort order over the same visible set, not a second rights
+        # check. model_name is required, not defaulted: mixing vectors from
+        # two different embedding models in one ORDER BY would compare
+        # distances that live in unrelated vector spaces and return
+        # meaningless nonsense silently.
+        rows = self._session.execute(
+            select(SegmentORM)
+            .join(EmbeddingORM, EmbeddingORM.segment_id == SegmentORM.id)
+            .join(
+                RightsClassificationORM,
+                RightsClassificationORM.document_id == SegmentORM.document_id,
+            )
+            .where(
+                RightsClassificationORM.jurisdiction == jurisdiction,
+                RightsClassificationORM.may_process.is_(True),
+                RightsClassificationORM.may_index_fulltext.is_(True),
+                RightsClassificationORM.revoked_at.is_(None),
+                EmbeddingORM.model_name == model_name,
+                EmbeddingORM.vector.cosine_distance(query_vector)
+                <= _CHAT_SEGMENT_MAX_COSINE_DISTANCE,
+            )
+            .order_by(EmbeddingORM.vector.cosine_distance(query_vector))
+            .limit(limit)
+        ).scalars()
+        return [_segment_to_domain(row) for row in rows]
+
+def _embedding_to_domain(orm: EmbeddingORM) -> Embedding:
+    return Embedding(
+        id=orm.id,
+        segment_id=orm.segment_id,
+        delivery_id=orm.delivery_id,
+        model_name=orm.model_name,
+        vector=list(orm.vector),
+        created_at=orm.created_at,
+    )
+
+class PostgresEmbeddingRepository(EmbeddingRepository):
+    def __init__(self, session: Session):
+        self._session = session
+
+    def add_embedding(
+        self,
+        *,
+        segment_id: uuid.UUID,
+        delivery_id: uuid.UUID,
+        model_name: str,
+        vector: list[float],
+    ) -> tuple[Embedding, bool]:
+        _require_active_delivery(self._session, delivery_id)
+
+        existing = self._session.execute(
+            select(EmbeddingORM).where(
+                EmbeddingORM.segment_id == segment_id,
+                EmbeddingORM.model_name == model_name,
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return _embedding_to_domain(existing), False
+
+        orm = EmbeddingORM(
+            id=uuid.uuid4(),
+            segment_id=segment_id,
+            delivery_id=delivery_id,
+            model_name=model_name,
+            vector=vector,
+        )
+        try:
+            with self._session.begin_nested():
+                self._session.add(orm)
+                self._session.flush()
+        except IntegrityError:
+            existing = self._session.execute(
+                select(EmbeddingORM).where(
+                    EmbeddingORM.segment_id == segment_id,
+                    EmbeddingORM.model_name == model_name,
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                raise
+            return _embedding_to_domain(existing), False
+        return _embedding_to_domain(orm), True
+
+    def get_embedding_unchecked(
+        self, segment_id: uuid.UUID, model_name: str
+    ) -> Embedding | None:
+        """
+        Fetch one embedding without any rights gate.
+
+        Deliberately not part of the `EmbeddingRepository` Protocol: it takes no
+        jurisdiction and joins no classification, so it is a pipeline and
+        administrative method (proving an embedding was removed with its
+        delivery, say), never a content-serving read.
+        """
+        orm = self._session.execute(
+            select(EmbeddingORM).where(
+                EmbeddingORM.segment_id == segment_id,
+                EmbeddingORM.model_name == model_name,
+            )
+        ).scalar_one_or_none()
+        return _embedding_to_domain(orm) if orm else None
+
+def _document_embedding_to_domain(orm: DocumentEmbeddingORM) -> DocumentEmbedding:
+    return DocumentEmbedding(
+        id=orm.id,
+        document_id=orm.document_id,
+        model_name=orm.model_name,
+        vector=list(orm.vector),
+        delivery_id=orm.delivery_id,
+        created_at=orm.created_at,
+    )
+
+class PostgresDocumentEmbeddingRepository(DocumentEmbeddingRepository):
+    def __init__(self, session: Session):
+        self._session = session
+
+    def upsert_document_embedding(
+        self, *, document_id: uuid.UUID, delivery_id: uuid.UUID, model_name: str,
+        vector: list[float],
+    ) -> DocumentEmbedding:
+        _require_active_delivery(self._session, delivery_id)
+        stmt = (
+            pg_insert(DocumentEmbeddingORM)
+            .values(
+                id=uuid.uuid4(), document_id=document_id, delivery_id=delivery_id,
+                model_name=model_name, vector=vector,
+            )
+            .on_conflict_do_update(
+                index_elements=[DocumentEmbeddingORM.document_id, DocumentEmbeddingORM.model_name],
+                set_={"vector": vector, "delivery_id": delivery_id},
+            )
+            .returning(DocumentEmbeddingORM)
+        )
+        orm = self._session.execute(stmt).scalar_one()
+        self._session.flush()
+        return _document_embedding_to_domain(orm)
+
+    def list_documents_without_embedding(self, model_name: str) -> list[Document]:
+        rows = self._session.execute(
+            select(DocumentORM)
+            .where(
+                ~sa.exists(
+                    select(DocumentEmbeddingORM.id).where(
+                        DocumentEmbeddingORM.document_id == DocumentORM.id,
+                        DocumentEmbeddingORM.model_name == model_name,
+                    )
+                )
+            )
+            .order_by(DocumentORM.id)
+        ).scalars()
+        return [_document_to_domain(row) for row in rows]
+
+def _identity_case_to_domain(orm: IdentityResolutionCaseORM) -> IdentityResolutionCase:
+    return IdentityResolutionCase(
+        id=orm.id,
+        delivery_id=orm.delivery_id,
+        case_type=orm.case_type,
+        raw_designation=orm.raw_designation,
+        raw_issuer=orm.raw_issuer,
+        reason=orm.reason,
+        status=orm.status,
+        resolved_document_id=orm.resolved_document_id,
+        source_work_id=orm.source_work_id,
+        target_work_id=orm.target_work_id,
+        resolved_at=orm.resolved_at,
+        resolved_by=orm.resolved_by,
+        created_at=orm.created_at,
+    )
+
+class PostgresIdentityResolutionRepository(IdentityResolutionRepository):
+    def __init__(self, session: Session):
+        self._session = session
+
+    def enqueue_case(
+        self,
+        *,
+        delivery_id: uuid.UUID,
+        raw_designation: str,
+        raw_issuer: str | None,
+        reason: str,
+    ) -> IdentityResolutionCase:
+        _require_active_delivery(self._session, delivery_id)
+        orm = IdentityResolutionCaseORM(
+            id=uuid.uuid4(),
+            delivery_id=delivery_id,
+            raw_designation=raw_designation,
+            raw_issuer=raw_issuer,
+            reason=reason,
+            status=IdentityResolutionStatus.PENDING,
+        )
+        self._session.add(orm)
+        self._session.flush()
+        return _identity_case_to_domain(orm)
+
+    def enqueue_work_merge_case(
+        self, *, delivery_id: uuid.UUID, source_work_id: uuid.UUID,
+        target_work_id: uuid.UUID, reason: str,
+    ) -> IdentityResolutionCase:
+        _require_active_delivery(self._session, delivery_id)
+        orm = IdentityResolutionCaseORM(
+            id=uuid.uuid4(),
+            delivery_id=delivery_id,
+            case_type=IdentityResolutionCaseType.WORK_MERGE,
+            raw_designation=None,
+            raw_issuer=None,
+            reason=reason,
+            status=IdentityResolutionStatus.PENDING,
+            source_work_id=source_work_id,
+            target_work_id=target_work_id,
+        )
+        self._session.add(orm)
+        self._session.flush()
+        return _identity_case_to_domain(orm)
+
+    def list_pending_cases(self) -> list[IdentityResolutionCase]:
+        rows = self._session.execute(
+            select(IdentityResolutionCaseORM)
+            .where(IdentityResolutionCaseORM.status == IdentityResolutionStatus.PENDING)
+            .order_by(IdentityResolutionCaseORM.created_at)
+        ).scalars()
+        return [_identity_case_to_domain(row) for row in rows]
+
+    def resolve_case(
+        self, case_id: uuid.UUID, *, resolved_document_id: uuid.UUID, resolved_by: str
+    ) -> IdentityResolutionCase:
+        orm = self._session.get(IdentityResolutionCaseORM, case_id)
+        orm.status = IdentityResolutionStatus.RESOLVED
+        orm.resolved_document_id = resolved_document_id
+        orm.resolved_by = resolved_by
+        orm.resolved_at = datetime.now(orm.created_at.tzinfo)
+        self._session.flush()
+        return _identity_case_to_domain(orm)
+
+    def resolve_work_merge_case(
+        self, case_id: uuid.UUID, *, resolved_by: str
+    ) -> IdentityResolutionCase:
+        orm = self._session.get(IdentityResolutionCaseORM, case_id)
+        source_work = self._session.get(WorkORM, orm.source_work_id)
+        target_work = self._session.get(WorkORM, orm.target_work_id)
+        if orm.source_work_id == orm.target_work_id or target_work.status != WorkStatus.ACTIVE:
+            raise ContradictoryWorkMergeError(orm.source_work_id, orm.target_work_id)
+
+        self._session.execute(
+            sa.update(DocumentORM)
+            .where(DocumentORM.work_id == orm.source_work_id)
+            .values(work_id=orm.target_work_id)
+        )
+        source_work.status = WorkStatus.MERGED
+        source_work.merged_into_work_id = orm.target_work_id
+
+        # Keep every merge chain exactly one hop deep: any other Work that
+        # was already pointing at the source (from an earlier merge into it)
+        # must now point at the new target instead, or get_work()'s
+        # single-hop redirect would land on a Work that is itself retired.
+        self._session.execute(
+            sa.update(WorkORM)
+            .where(WorkORM.merged_into_work_id == orm.source_work_id)
+            .values(merged_into_work_id=orm.target_work_id)
+        )
+
+        orm.status = IdentityResolutionStatus.RESOLVED
+        orm.resolved_by = resolved_by
+        orm.resolved_at = datetime.now(orm.created_at.tzinfo)
+        self._session.flush()
+        return _identity_case_to_domain(orm)
+
+    def reject_case(self, case_id: uuid.UUID, *, resolved_by: str) -> IdentityResolutionCase:
+        orm = self._session.get(IdentityResolutionCaseORM, case_id)
+        orm.status = IdentityResolutionStatus.REJECTED
+        orm.resolved_by = resolved_by
+        orm.resolved_at = datetime.now(orm.created_at.tzinfo)
+        self._session.flush()
+        return _identity_case_to_domain(orm)
+
+class PostgresRateLimitRepository(RateLimitRepository):
+    def __init__(self, session: Session):
+        self._session = session
+
+    def record_and_check(self, *, key: str, window_start: datetime, limit: int) -> bool:
+        # INSERT ... ON CONFLICT DO UPDATE is atomic under concurrent requests
+        # for the same key -- two simultaneous requests in the same window
+        # both reliably see their own increment, unlike a read-then-write
+        # pattern from Python.
+        stmt = (
+            pg_insert(RateLimitBucketORM)
+            .values(key=key, window_start=window_start, request_count=1)
+            .on_conflict_do_update(
+                index_elements=["key", "window_start"],
+                set_={"request_count": RateLimitBucketORM.request_count + 1},
+            )
+            .returning(RateLimitBucketORM.request_count)
+        )
+        count = self._session.execute(stmt).scalar_one()
+        self._session.flush()
+        return count <= limit
+
+    def delete_buckets_before(self, cutoff: datetime) -> None:
+        # Without this the table grows one row per (key, minute) forever, and
+        # each key embeds a caller address -- so unbounded growth is also
+        # indefinite retention of an identifier. Callers run it opportunistically
+        # alongside record_and_check, which keeps the table bounded without a
+        # scheduled job.
+        self._session.execute(
+            sa.delete(RateLimitBucketORM).where(RateLimitBucketORM.window_start < cutoff)
+        )
+        self._session.flush()
