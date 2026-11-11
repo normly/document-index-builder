@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: Images
+on:
+  push:
+    branches: [main]
+    tags: ["v[0-9]*.[0-9]*.[0-9]*"]
+  workflow_dispatch:
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+  publish:
+    needs: verify
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+    env:
+      REGISTRY: ghcr.io/normly/document_index
+      COSIGN_YES: "true"
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check release version and choose image tags
+        id: tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA::7}"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            version="${GITHUB_REF_NAME#v}"
+            for package in core api; do
+              actual=$(python3 -c "import tomllib; print(tomllib.load(open('$package/pyproject.toml','rb'))['project']['version'])")
+              [[ "$actual" == "$version" ]] || { echo "Package version differs from release tag" >&2; exit 1; }
+            done
+            echo "tags=$version ${version%.*} latest sha-$short" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=edge sha-$short" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish code-only images with provenance and SBOM
+        env:
+          TAGS: ${{ steps.tags.outputs.tags }}
+          PUSH: "1"
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: docker buildx bake -f docker-bake.hcl --push --metadata-file "$RUNNER_TEMP/images.json"
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign both image digests using this repository's OIDC identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in builder retrieval; do
+            digest=$(jq -er --arg target "$target" '.[$target]["containerimage.digest"]' "$RUNNER_TEMP/images.json")
+            cosign sign "$REGISTRY/$target@$digest"
+            echo "$target $digest" >> "$GITHUB_STEP_SUMMARY"
+          done
+      - name: Publish the reviewed API contract with tagged software releases
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          gh release view "$GITHUB_REF_NAME" || gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+          gh release upload "$GITHUB_REF_NAME" api/openapi.yaml --clobber
