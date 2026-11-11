@@ -17,10 +17,10 @@ were not modified.
   verified it using the extracted verifier, and imported it into a fresh
   knowledge-only database with the same document UUID.
 - Ran the complete package/developer/lifecycle suite with cached pinned e5 and
-  Docling models, offline: **509 passed**. The three image-only cases are
+  Docling models, offline: **516 passed** after the review fixes. The three image-only cases are
   deliberately opt-in in the ordinary suite and were run separately:
   **3 passed**. The suite reports upstream Starlette/AnyIO and Docling/Pydantic
-  deprecation warnings; they were not hidden as successful real-source checks.
+  deprecation warnings (78 in the final source-suite run); they were not hidden as successful real-source checks.
 - Built both runtime images locally and inspected actual contents: non-root,
   prepared offline weights, full license text, no source PDFs/private inputs,
   and no importable Docling in retrieval.
@@ -42,6 +42,43 @@ See [releasing](releasing.md) for repeatable commands and
 [`tests/container_smoke.py`](../../tests/container_smoke.py) for the container
 rehearsal. Use prepared models, not implicit runtime downloads. Final branch
 review and any subsequent fix verification are recorded in Git history.
+
+## Whole-branch review
+
+A fresh read-only review identified three Important issues, each reproduced by
+a failing test and corrected:
+
+1. Restrict the shared Docling converter to PDF, preventing authorized/hash-matched
+   HTML or images from entering alternative pipelines with unrelated defaults.
+2. Check the authoritative pending identity/work-review table before export,
+   rather than relying only on the runner's summary counter. Legacy diagnostic
+   ingestion retains its existing counter behavior.
+3. Bind reusable storage to actual implementation identity: source/image IDs,
+   package/migration source digests, installed package versions and Python version.
+   Pin the resolved builder image ID for a job, not a mutable tag. This prevents
+   old delivery hashes from hiding implementation changes while provenance
+   advertises a newer builder.
+
+The complete suite passed after these fixes. The locally rebuilt images carry
+code revision `99af4eeecbc582dad2f654896656cd0567e46cb8`:
+
+| Image | Local image ID (not a published registry manifest digest) |
+|---|---|
+| Builder | `sha256:215d408baec465875a245d477143297f6d631cb7eaba1a54fbba845b9b98bc77` |
+| Retrieval | `sha256:ae23ca967adea6cf4bf5d5e82649909819d0896de818c803559d8ef7472218e3` |
+
+Against these post-review images, the three image-boundary tests passed and the
+complete shipped container rehearsal passed again: inspection/ownership, both
+implementation-bound signed builds, fresh consumer retrieval, explicit update,
+bad-signature preservation and restart. This also exercises the real resolved
+image-ID selection and implementation fingerprint during actual model loading.
+
+One minor finding is deferred: existence checks followed by directory rename
+are not atomically no-replace. A concurrently created **empty** destination can
+be replaced in that narrow interval. Existing nonempty output is protected;
+ordinary sequential reruns refuse any existing destination. The guides warn
+against concurrent destination creation. This is not a claim of general loss
+of populated output.
 
 ## Deliberate boundaries and outstanding external checks
 
