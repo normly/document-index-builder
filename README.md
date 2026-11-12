@@ -1,4 +1,4 @@
-# document_index
+# document-index-builder
 
 Ingestion and document index generation.
 

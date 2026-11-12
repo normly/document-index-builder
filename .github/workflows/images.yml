@@ -23,7 +23,7 @@ jobs:
       packages: write
       id-token: write
     env:
-      REGISTRY: ghcr.io/normly/document_index
+      REGISTRY: ghcr.io/normly/document-index-builder
       COSIGN_YES: "true"
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:

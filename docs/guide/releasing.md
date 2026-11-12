@@ -14,15 +14,15 @@ The reviewed contract is `api/openapi.yaml`, published with tagged software rele
 
 ## Publication
 
-`images.yml` waits for the reusable verification workflow before publication. Main builds receive `edge`/commit tags; tagged releases receive SemVer/commit tags. Images go to `ghcr.io/normly/document_index/{builder,retrieval}` with BuildKit provenance/SBOM and cosign keyless signatures bound to **this repository's** workflow, never the old `web-app` identity. Source/model preparation and synthetic CI are allowed on GitHub; no STACKIT operation/deployment credentials are configured there.
+`images.yml` waits for the reusable verification workflow before publication. Main builds receive `edge`/commit tags; tagged releases receive SemVer/commit tags. Images go to `ghcr.io/normly/document-index-builder/{builder,retrieval}` with BuildKit provenance/SBOM and cosign keyless signatures bound to **this repository's** workflow, never the old `web-app` identity. Source/model preparation and synthetic CI are allowed on GitHub; no STACKIT operation/deployment credentials are configured there.
 
 Verify with the expected workflow identity and OIDC issuer, for example:
 
 ```sh
 cosign verify \
-  --certificate-identity-regexp '^https://github\.com/normly/document_index/\.github/workflows/images\.yml@refs/' \
+  --certificate-identity-regexp '^https://github\.com/normly/document-index-builder/\.github/workflows/images\.yml@refs/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/normly/document_index/retrieval@sha256:VERIFIED_DIGEST
+  ghcr.io/normly/document-index-builder/retrieval@sha256:VERIFIED_DIGEST
 ```
 
 Do not use an unverified registry tag as a production trust anchor. The implemented workflow has not been published or executed merely by adding it to this branch; actual registry permissions, release signatures and release assets require an authorized run.

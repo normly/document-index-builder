@@ -8,7 +8,7 @@ group "default" {
 }
 target "_common" {
   labels = {
-    "org.opencontainers.image.source" = "https://github.com/normly/document_index"
+    "org.opencontainers.image.source" = "https://github.com/normly/document-index-builder"
     "org.opencontainers.image.licenses" = "AGPL-3.0-or-later"
     "org.opencontainers.image.revision" = SOURCE_COMMIT
   }

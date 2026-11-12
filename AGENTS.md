@@ -1,4 +1,4 @@
-# document_index — repository instructions
+# document-index-builder — repository instructions
 
 This AGPL repository owns document ingestion, knowledge persistence, signed knowledge releases and retrieval. `web_app` owns accounts, chat orchestration and user state. Keep their boundary HTTP-only; do not introduce account/chat tables here.
 
