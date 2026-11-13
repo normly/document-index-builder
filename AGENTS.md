@@ -2,6 +2,26 @@
 
 This AGPL repository owns document ingestion, knowledge persistence, signed knowledge releases and retrieval. `web_app` owns accounts, chat orchestration and user state. Keep their boundary HTTP-only; do not introduce account/chat tables here.
 
+## Repository workflow skills
+
+Before running a repository workflow, load the matching skill below. Skills
+live in `.agents/skills/<name>/SKILL.md`. If the harness does not discover them,
+read the linked file directly. Resolve repository paths in skills from the
+repository root, not from the skill directory. Humans start with [README.md](README.md).
+
+| Requested work | Required skill |
+|---|---|
+| Build/rebuild the builder or retrieval Docker image | [building-document-index-images](.agents/skills/building-document-index-images/SKILL.md) |
+| Inspect one PDF, export Markdown/Docling JSON, or tune parser settings | [inspecting-document-index-pdfs](.agents/skills/inspecting-document-index-pdfs/SKILL.md) |
+| Ingest into an isolated build or create/retry a signed knowledge release | [building-document-index-releases](.agents/skills/building-document-index-releases/SKILL.md) |
+| Start retrieval, import/update knowledge, check readiness, or run local verification | [running-document-index-retrieval](.agents/skills/running-document-index-retrieval/SKILL.md) |
+
+Read additional skills as the task crosses workflows. An image build is not a
+knowledge build; PDF inspection needs no database. Skills explain the existing
+commands and link to detailed guides; they do not grant authorization to process
+sources, delete persisted state, publish artifacts or operate production.
+For implementation changes, also follow the engineering requirements below.
+
 ## Safety and rights
 
 - Operational services, production knowledge, secrets and publication belong exclusively on STACKIT. GitHub may host source, synthetic CI and code-only images, not actual knowledge data.
