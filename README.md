@@ -122,6 +122,9 @@ when the environment variable is unset.
   Unlike PDF inspection, this needs a dedicated database and a signing key.
 - **Run search over prepared knowledge:** follow [Self-hosting](docs/guide/self-hosting.md).
   Retrieval imports a separately trusted, signed release; it does not ingest PDFs.
+- **Check an authorized real PDF end to end locally:** follow the [local
+  ingestion-to-retrieval acceptance procedure](docs/guide/verification.md#local-real-pdf-ingestion-to-retrieval-acceptance).
+  This is separate from the local Docling/adapter tests and from synthetic CI.
 - **Develop or test the software:** read [CONTRIBUTING.md](CONTRIBUTING.md),
   [REVIEW.md](REVIEW.md) and [verification and releases](docs/guide/releasing.md).
 
