@@ -1,18 +1,17 @@
 # document-index-builder
 
-Turn authorized source documents into a searchable knowledge base. Start small by converting single PDFs per standard family to Markdown so you can check how headings, text and tables are extracted. Populate the files in web-app-raw-data: "extraction-test-annotations.md". These capture manually extracted and verified information, that is to be used to validate each standard families adapter.
+Turn authorized source documents into a searchable knowledge base. Start small by converting single PDFs per standard family to Markdown so you can check how headings, text and tables are extracted. For repeatable adapter checks, keep manually reviewed expectations in `web-app-raw-data/raw_data_test/<family>/extraction-test-annotations.json`, using the shared template and instructions in that private submodule. One family-neutral local test harness discovers those files and selects the registered adapter named by each case.
 
-When the extraction settings work, build a signed knowledge release (based on a pinned version of documend-index-builder and web-app-raw-data) for the retrieval service to search.
+When extraction settings work, build a signed knowledge release from pinned
+builder software and source inputs. The builder stores parsed knowledge in its
+dedicated PostgreSQL/pgvector build database, then exports the release—not a
+database dump. The release contains Parquet files for approved knowledge tables,
+plus a manifest and signature. On deployment, retrieval verifies and imports the
+release into its own, separate PostgreSQL/pgvector database; that is the database
+the API serves from. Build-only state is not included in the release.
 
-There is one Docker image used in the pipeline:
-
-- **Builder:** reads/ingests documents, supports single-PDF inspection for testing, and builds
-  knowledge releases. (This will create an additional container)
-
-There are two Docker images used in the deplyoment:
-- **Knowledge Release:** the populated database
-- **Retrieval:** serves the search API using the knowledge
-  release.
+The **Builder** image ingests documents and creates releases. The **Retrieval**
+image serves the search API from the separately populated consumer database.
 
 Not part of the scope of this repo: `web_app` owns accounts, chat and user state; it communicates with retrieval over HTTP.
 
@@ -98,7 +97,23 @@ Use **Terminal → Run Task**:
 
 ## Validate adapters
 
-to be extended: use the "extraction-test-annotations.md" stored in web-app-raw-data to run automated tests on existing adapters.
+The private `web-app-raw-data` submodule contains the JSON template, per-family
+annotation records, and the detailed [real-PDF test guide](web-app-raw-data/EXTRACTION_TESTS.md).
+The generic test harness checks selected Docling properties and the adapter's
+annotated records, sections, and anchor assignments. It is local-only and
+requires human-verified annotations; ordinary CI remains synthetic-only. After
+reviewing a case and preparing pinned Docling artifacts offline, run from the
+repository root:
+
+```sh
+RUN_REAL_PDF_TESTS=1 uv run --group dev --all-packages --all-extras \
+  python -m pytest \
+  core/tests/pipeline/test_real_pdf_annotations.py \
+  core/tests/pipeline/test_real_pdf_extraction.py -q
+```
+
+Draft annotations fail the opt-in validation guard; tests skip private inputs
+when the environment variable is unset.
 
 ## Next steps
 
