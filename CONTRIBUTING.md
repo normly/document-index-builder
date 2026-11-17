@@ -9,7 +9,7 @@ pull requests. CI runs on pull requests; follow `REVIEW.md` and summarize checks
 in the PR. Use Conventional Commit messages and DCO sign-off (`git commit -s`)
 with your configured human identity.
 
-Python is managed with uv. Each package owns tests; use prepared model artifacts for offline integration checks. Run the checks required by `REVIEW.md`, record commands and outcomes, and report unavailable checks honestly. Never substitute mocked SQLite tests for PostgreSQL/vector/transaction coverage.
+Python is managed with uv. Each package owns tests; use prepared model artifacts for offline integration checks. Follow the [verification guide](docs/guide/verification.md), run the checks required by `REVIEW.md`, record commands and outcomes in the applicable verification record, and report unavailable checks honestly. Never substitute mocked SQLite tests for PostgreSQL/vector/transaction coverage.
 
 ```sh
 uv sync --locked --all-packages --all-extras

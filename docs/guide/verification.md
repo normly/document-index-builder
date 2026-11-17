@@ -1,101 +1,97 @@
-# Extraction verification record
+# Verification guide
 
-This is a local synthetic verification record, not a production deployment or
-registry publication. The extraction source is `web-app-local_dev_tooling` at
-`41a3ce276505f2edd11bdb5ad0db1ae85acbed64`; its unrelated untracked
-`.github/dependabot.yml` was preserved. `web_app` product code and live databases
-were not modified.
+Use this guide to select and run repeatable software checks. It describes
+procedures, not the outcome of a particular branch or test run. Run-specific
+evidence is kept separately in the [verification record](../verification-record.md).
 
-## Evidence
+## Principles
 
-- Ran all 43 legacy migrations in disposable PostgreSQL/pgvector and compared
-  the 14 extracted baseline tables with the new baseline: column types/defaults,
-  checks, unique constraints, foreign keys and indexes matched. Preserved six
-  migration-only server defaults and `segment.text`'s SQL `TEXT` type that the
-  old ORM did not fully describe. New build identity is a separate migration.
-- Generated an export using the **original** exporter and synthetic rows,
-  verified it using the extracted verifier, and imported it into a fresh
-  knowledge-only database with the same document UUID.
-- Ran the complete package/developer/lifecycle suite with cached pinned e5 and
-  Docling models, offline: **516 passed** after the review fixes. The three image-only cases are
-  deliberately opt-in in the ordinary suite and were run separately:
-  **3 passed**. The suite reports upstream Starlette/AnyIO and Docling/Pydantic
-  deprecation warnings (78 in the final source-suite run); they were not hidden as successful real-source checks.
-- Built both runtime images locally and inspected actual contents: non-root,
-  prepared offline weights, full license text, no source PDFs/private inputs,
-  and no importable Docling in retrieval.
-- Ran `tests/container_smoke.py`: single-PDF container inspection with four
-  output files and host ownership; two isolated build configurations producing
-  signed releases; fresh consumer import and ready API; document search and
-  three parsed segments; explicit update; rejected bad signature preserving
-  the active release; restart preservation. Only the rehearsal's newly created
-  unique Docker projects/volumes were removed.
-- OpenAPI equality and intentional-schema-drift rejection passed. Compared
-  the original `/v1` operations and components with the extracted schema;
-  `/v1` remains unchanged. License metadata is corrected to AGPL, and readiness
-  is an additive route with an explicitly modeled 503 response.
-- Bash syntax and workflow YAML parsing passed. The release bake definition
-  resolves both repository-specific registry namespaces and provenance/SBOM
-  attestations without publishing.
+- CI uses synthetic inputs only. Private or real-source PDFs are local-only and
+  may be processed only when their rights classification and test authorization
+  permit it.
+- Prepare pinned model artifacts explicitly. Runtime tests run offline and must
+  not download models implicitly.
+- Use disposable PostgreSQL/pgvector test databases for integration tests; do
+  not point verification commands at operational databases.
+- Verification does not publish software images, knowledge releases, or other
+  artifacts. External publication and production checks require separate
+  authorization.
 
-See [releasing](releasing.md) for repeatable commands and
-[`tests/container_smoke.py`](../../tests/container_smoke.py) for the container
-rehearsal. Use prepared models, not implicit runtime downloads. Final branch
-review and any subsequent fix verification are recorded in Git history.
+## Standard local test suite
 
-## Whole-branch review
+Install locked development dependencies and prepare the pinned models once:
 
-A fresh read-only review identified three Important issues, each reproduced by
-a failing test and corrected:
+```sh
+uv sync --locked --all-packages --all-extras
+uv run --no-sync python docker/prepare-models.py --kind all --output .local/models
+```
 
-1. Restrict the shared Docling converter to PDF, preventing authorized/hash-matched
-   HTML or images from entering alternative pipelines with unrelated defaults.
-2. Check the authoritative pending identity/work-review table before export,
-   rather than relying only on the runner's summary counter. Legacy diagnostic
-   ingestion retains its existing counter behavior.
-3. Bind reusable storage to actual implementation identity: source/image IDs,
-   package/migration source digests, installed package versions and Python version.
-   Pin the resolved builder image ID for a job, not a mutable tag. This prevents
-   old delivery hashes from hiding implementation changes while provenance
-   advertises a newer builder.
+Model preparation is the explicit step that may access the configured model
+source. Then run the suite offline, using the prepared model directories:
 
-The complete suite passed after these fixes. The locally rebuilt images carry
-code revision `99af4eeecbc582dad2f654896656cd0567e46cb8`:
+```sh
+HF_HUB_OFFLINE=1 \
+  NORMLY_EMBEDDING_MODEL_PATH="$PWD/.local/models/multilingual-e5-large" \
+  NORMLY_DOCLING_ARTIFACTS_PATH="$PWD/.local/models/docling" \
+  uv run --no-sync pytest -q
+```
 
-| Image | Local image ID (not a published registry manifest digest) |
-|---|---|
-| Builder | `sha256:215d408baec465875a245d477143297f6d631cb7eaba1a54fbba845b9b98bc77` |
-| Retrieval | `sha256:ae23ca967adea6cf4bf5d5e82649909819d0896de818c803559d8ef7472218e3` |
+The full suite includes disposable PostgreSQL/pgvector integration checks and
+requires a Docker environment suitable for Testcontainers. See
+[CONTRIBUTING](../../CONTRIBUTING.md) and [REVIEW](../../REVIEW.md) for the
+development setup and required coverage. Run narrower tests with
+`uv run --no-sync pytest <test-path> -q` when iterating, but report the
+full-suite result separately. If a prepared model or service is unavailable,
+record that prerequisite failure; do not describe those checks as passing.
 
-Against these post-review images, the three image-boundary tests passed and the
-complete shipped container rehearsal passed again: inspection/ownership, both
-implementation-bound signed builds, fresh consumer retrieval, explicit update,
-bad-signature preservation and restart. This also exercises the real resolved
-image-ID selection and implementation fingerprint during actual model loading.
+## Targeted checks
 
-One minor finding is deferred: existence checks followed by directory rename
-are not atomically no-replace. A concurrently created **empty** destination can
-be replaced in that narrow interval. Existing nonempty output is protected;
-ordinary sequential reruns refuse any existing destination. The guides warn
-against concurrent destination creation. This is not a claim of general loss
-of populated output.
+- Check the API schema contract:
 
-## Deliberate boundaries and outstanding external checks
+  ```sh
+  uv run --no-sync python scripts/check-api-contract.py
+  ```
 
-- No real/private corpus or publisher canary was accessed. Synthetic Docling
-  and embedding checks validate wiring, not comprehensive extraction/retrieval
-  quality for production sources.
-- The VS Code task definitions and their exact terminal wrappers were tested;
-  the graphical editor/Markdown preview was not exercised in this headless
-  session.
-- GitHub workflows were authored and checked locally, not pushed/executed.
-  Actual registry publication, OIDC signatures, SBOM/provenance uploads and
-  release assets still require an authorized CI run.
-- User-data migrations, new passage/batch/notification contracts and production
-  rollback remain gated by the separate `web_app` cutover design. Fresh isolated
-  experimental databases do not promise identical UUIDs across rebuilds;
-  export/import preserves a build's identifiers and retains missing IDs as
-  tombstones.
-- Knowledge signing keys used by tests were ephemeral and synthetic. No real
-  signing ceremony, corpus publication, production key management or encrypted
-  infrastructure setup was performed by this change.
+- After building both local images, run the image boundary tests:
+
+  ```sh
+  docker buildx bake -f docker-bake.hcl --load builder retrieval
+  RUN_IMAGE_TESTS=1 uv run --no-sync pytest tests/test_image_boundaries.py -q
+  ```
+
+- After the images are built, `uv run --no-sync python tests/container_smoke.py`
+  rehearses an isolated synthetic build/import lifecycle. It creates and removes
+  only its own uniquely named Docker projects and volumes. See
+  [releasing](releasing.md) for the complete promotion and compatibility checks.
+
+## Local real-PDF adapter checks
+
+These checks are separate from CI and require the private `web-app-raw-data`
+submodule, authorized local test PDFs, human-verified annotations, and prepared
+offline Docling artifacts. Follow
+[`web-app-raw-data/EXTRACTION_TESTS.md`](../../web-app-raw-data/EXTRACTION_TESTS.md)
+to review and maintain the annotation data.
+
+From the repository root, explicitly opt in:
+
+```sh
+NORMLY_DOCLING_ARTIFACTS_PATH="$PWD/.local/models/docling" \
+RUN_REAL_PDF_TESTS=1 uv run --group dev --all-packages --all-extras \
+  python -m pytest \
+  core/tests/pipeline/test_real_pdf_annotations.py \
+  core/tests/pipeline/test_real_pdf_extraction.py -q
+```
+
+Without `RUN_REAL_PDF_TESTS=1`, tests skip before reading private annotations or
+PDFs. With opt-in, annotation shape is checked; draft data fails the human-review
+guard, and Docling/adapter checks skip before parsing. Mark a case `verified`
+only after checking its expectations against the rendered PDF. Never add these
+PDFs or their extracted text to CI or public artifacts.
+
+## Recording results
+
+For each verification run, record the exact commands, pass/skip/failure counts,
+model and database prerequisites, and external checks not performed. Distinguish
+synthetic wiring checks from real-source evidence. Keep that run-specific record
+separate from this procedure; see the current
+[verification record](../verification-record.md).

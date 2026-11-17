@@ -9,11 +9,6 @@ import pytest
 from normly_core.pipeline.adapters.baua import BauaAdapter
 from normly_core.pipeline.domain import RawRecord
 
-from .baua_test_support import (
-    BAUA_REAL_DOCUMENT_HEADING_CANARIES,
-    assert_heading_canaries,
-)
-
 
 def _write_publication_pdf(path: Path, lines: list[str]) -> None:
     from reportlab.pdfgen import canvas
@@ -37,14 +32,14 @@ def _write_publication_pdf(path: Path, lines: list[str]) -> None:
     pdf.save()
 
 
-def _write_heading_canary_pdf(
+def _write_synthetic_numbered_publication_pdf(
     path: Path,
     *,
     designation: str,
     expected_first_heading: str,
     expected_last_heading: str,
 ) -> None:
-    """Generate a synthetic PDF with the real samples' heading canaries."""
+    """Generate a synthetic BAuA-shaped PDF with invented heading values."""
     from reportlab.pdfgen import canvas
 
     pdf = canvas.Canvas(str(path))
@@ -63,37 +58,27 @@ def _write_heading_canary_pdf(
     pdf.save()
 
 
-@pytest.mark.parametrize(
-    "real_filename, designation, staged_name, first_heading, last_heading",
-    BAUA_REAL_DOCUMENT_HEADING_CANARIES,
-)
-def test_synthetic_pdf_extracts_real_document_heading_canaries(
-    tmp_path,
-    real_filename,
-    designation,
-    staged_name,
-    first_heading,
-    last_heading,
-):
-    _write_heading_canary_pdf(
-        tmp_path / staged_name,
-        designation=designation,
-        expected_first_heading=first_heading,
-        expected_last_heading=last_heading,
+def test_synthetic_pdf_runs_adapter_end_to_end_with_invented_headings(tmp_path):
+    _write_synthetic_numbered_publication_pdf(
+        tmp_path / "baua_trgs_999999.pdf",
+        designation="TRGS 999999",
+        expected_first_heading="1 Synthetic scope",
+        expected_last_heading="2 Synthetic definitions",
     )
     adapter = BauaAdapter(directory=tmp_path, source_id=uuid.uuid4())
 
     records = list(adapter.fetch())
 
     assert len(records) == 1
-    assert_heading_canaries(
-        adapter,
-        records[0],
-        sample_name=f"synthetic equivalent of {real_filename}",
-        expected_designation=designation,
-        expected_first_heading=first_heading,
-        expected_last_heading=last_heading,
-    )
+    record = records[0]
+    assert record.raw_designation == "TRGS 999999"
+    assert record.raw_issuer == "BAuA"
+    assert record.full_text is not None
+    sections = adapter.extract_structure(record)
+    assert [section.heading for section in sections if section.heading is not None] == [
+        "1 Synthetic scope",
+        "2 Synthetic definitions",
+    ]
 
 
 @pytest.mark.parametrize(

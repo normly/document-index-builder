@@ -106,6 +106,7 @@ reviewing a case and preparing pinned Docling artifacts offline, run from the
 repository root:
 
 ```sh
+NORMLY_DOCLING_ARTIFACTS_PATH="$PWD/.local/models/docling" \
 RUN_REAL_PDF_TESTS=1 uv run --group dev --all-packages --all-extras \
   python -m pytest \
   core/tests/pipeline/test_real_pdf_annotations.py \
@@ -164,7 +165,8 @@ file directly; no global skill installation is required.
 - [Retrieval API semantics](docs/guide/retrieval-api.md) / [OpenAPI](api/openapi.yaml)
 - [Signed knowledge exchange](docs/guide/knowledge-releases.md)
 - [Extraction ownership and coordinated web_app cutover](docs/guide/extraction-map.md)
-- [Verification evidence and remaining external checks](docs/guide/verification.md)
+- [Verification procedure](docs/guide/verification.md)
+- [Current verification record](docs/verification-record.md)
 
 ## License
 
