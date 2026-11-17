@@ -1,20 +1,20 @@
 # document-index-builder
 
-Turn authorized source documents into a searchable knowledge base. Start small
-by converting one PDF to Markdown so you can check how headings, text and tables
-are extracted. When the extraction settings work, build a signed knowledge
-release for the retrieval service to search.
+Turn authorized source documents into a searchable knowledge base. Start small by converting single PDFs per standard family to Markdown so you can check how headings, text and tables are extracted. Populate the files in web-app-raw-data: "extraction-test-annotations.md". These capture manually extracted and verified information, that is to be used to validate each standard families adapter.
 
-There are two Docker images:
+When the extraction settings work, build a signed knowledge release (based on a pinned version of documend-index-builder and web-app-raw-data) for the retrieval service to search.
 
-- **Builder:** reads documents, supports single-PDF inspection, and builds
-  knowledge releases.
-- **Retrieval:** serves the search API using an already prepared knowledge
-  release. It does not run document ingestion.
+There is one Docker image used in the pipeline:
 
-Neither image contains source PDFs or a populated database. Full knowledge
-builds and retrieval use separate PostgreSQL databases. `web_app` owns accounts,
-chat and user state; it communicates with retrieval over HTTP.
+- **Builder:** reads/ingests documents, supports single-PDF inspection for testing, and builds
+  knowledge releases. (This will create an additional container)
+
+There are two Docker images used in the deplyoment:
+- **Knowledge Release:** the populated database
+- **Retrieval:** serves the search API using the knowledge
+  release.
+
+Not part of the scope of this repo: `web_app` owns accounts, chat and user state; it communicates with retrieval over HTTP.
 
 ## Start here: inspect one PDF
 
@@ -95,6 +95,10 @@ Use **Terminal → Run Task**:
 | **Document Index: Build builder image** | Prepare or rebuild the builder. |
 | **Document Index: Inspect PDF** | Supply a PDF, configuration, source and fresh output path. |
 | **Document Index: Build knowledge release** | Build a complete release after preparing authorized inputs, configuration, dedicated build storage and a signing key. |
+
+## Validate adapters
+
+to be extended: use the "extraction-test-annotations.md" stored in web-app-raw-data to run automated tests on existing adapters.
 
 ## Next steps
 
