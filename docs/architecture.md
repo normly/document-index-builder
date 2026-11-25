@@ -64,60 +64,19 @@ See [ingestion data flow](guide/ingestion-data-flow.md) and the
 
 ### Build a release from the private corpus
 
-Run from the repository root on authorized infrastructure. This is a guide,
-not permission to process or publish the data. You need access to the private
-submodule, Docker Engine, Compose and buildx, authorized inputs and storage,
-a dedicated build database password, and an existing Ed25519 private signing
-key. The first image build downloads the pinned model artifacts; runtime uses
-prepared local models.
+Use the operator-facing [README build steps](../README.md#build-a-signed-knowledge-release)
+for prerequisites, submodule setup, image preparation, configuration and the
+exact command. This guide focuses on the pipeline and data boundaries rather
+than duplicating the run instructions.
 
-1. Initialize the pinned corpus (the submodule URL uses SSH and requires access):
-
-   ```sh
-   git submodule update --init web-app-raw-data
-   ```
-
-2. Build the builder image and prepare a private configuration:
-
-   ```sh
-   REGISTRY= PUSH=0 docker buildx bake -f docker-bake.hcl --load builder
-   mkdir -p .local
-   cp -n builds/example.json .local/build.json
-   ```
-
-   Edit `.local/build.json`: use a unique `build_id` and immutable
-   `output_version`, select registered adapters and set each source directory to
-   a path under `/inputs`. Keep the pinned model and strategy unless implementing
-   a deliberate compatibility change. If the host input directory passed below
-   contains a `baua/` directory, the example's `/inputs/baua` refers to that
-   directory. Do not put credentials or keys in the JSON.
-
-3. Set `NORMLY_BUILD_POSTGRES_PASSWORD` privately to a dedicated URL-safe
-   password, then use a unique Compose project for this experiment:
-
-   ```sh
-   COMPOSE_PROJECT_NAME=document-index-experiment-01 \
-     bash scripts/build-knowledge .local/build.json \
-       '/path/to/authorized/inputs' .local/releases '/path/to/private-key.pem'
-   ```
-
-   Replace the input path with the relevant authorized directory from
-   `web-app-raw-data`. The wrapper mounts that directory read-only at `/inputs`,
-   starts the dedicated PostgreSQL/pgvector build service and writes the release
-   under `.local/releases/<output_version>/`. It does not publish the release.
-   Preserve the private key and outputs on permitted storage.
-
-4. Require a successful build and verification, then inspect the signed manifest
-   and parts. Verify with the separately provisioned trusted public key; merely
-   seeing files is not proof of validity. See [building knowledge](guide/building-knowledge.md)
-   and [signed knowledge releases](guide/knowledge-releases.md) for verification,
-   retry and promotion requirements.
-
-Each experiment needs its own empty build database. The build identity binds
-configuration, input hashes and implementation; changed inputs, settings or
-software need fresh storage, while a retry with the same identity can reuse it.
-Never reuse the consumer or shared application database, overwrite an existing
-release version, or delete persistent volumes as a routine retry.
+At a high level, the command runs the already-built Builder OCI image with the
+authorized input directory mounted read-only, a dedicated PostgreSQL/pgvector
+build database, private configuration and an existing Ed25519 signing key. It
+exports and verifies a release under the selected output directory; it does not
+publish that release. Build identity, review gates, retry behavior and
+promotion requirements are covered in [Building knowledge](guide/building-knowledge.md)
+and [Signed knowledge releases](guide/knowledge-releases.md). Never reuse the
+consumer or shared application database for a build.
 
 ## What is the database artifact?
 
