@@ -165,6 +165,7 @@ file directly; no global skill installation is required.
 
 ## Reference
 
+- [Architecture: build, artifact production, runtime deployment and request flow](docs/architecture.md)
 - [Retrieval API semantics](docs/guide/retrieval-api.md) / [OpenAPI](api/openapi.yaml)
 - [Signed knowledge exchange](docs/guide/knowledge-releases.md)
 - [Extraction ownership and coordinated web_app cutover](docs/guide/extraction-map.md)

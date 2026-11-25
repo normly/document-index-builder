@@ -1,0 +1,40 @@
+direction: down
+
+release_store: "STACKIT Object Storage\nselected immutable knowledge release\nParquet + manifest + signature" {
+  shape: document
+  style.fill: "#ffeadc"
+}
+web_release: "web_app project\nits own application release pipeline\nchat / accounts / user state" {
+  style.fill: "#f1e5ff"
+}
+
+runtime: "STACKIT — private runtime" {
+  chat_deployment: "web_app deployment\nHTTP consumer of retrieval" {
+    web: "Chat UI + orchestration\naccounts + user state\nseparate web_app release" {
+      style.fill: "#f1e5ff"
+    }
+  }
+  knowledge_deployment: "document-index-builder deployment" {
+    retrieval: "Running retrieval API service\nprivate HTTP :8000\nserves imported knowledge" {
+      style.fill: "#dceeff"
+    }
+    db: "Consumer PostgreSQL 16\n+ pgvector + persistent volume" {
+      shape: cylinder
+      style.fill: "#e4f4df"
+    }
+    bootstrap: "Bootstrap / initializer\nverify + transactional import" {
+      style.fill: "#dceeff"
+    }
+    trust: "Separately provisioned\ntrusted public-key PEM" {
+      style.fill: "#fff4d6"
+    }
+  }
+}
+
+release_store -> runtime.knowledge_deployment.bootstrap: "fetch selected version"
+runtime.knowledge_deployment.trust -> runtime.knowledge_deployment.bootstrap: "verify signature"
+runtime.knowledge_deployment.bootstrap -> runtime.knowledge_deployment.db: "import knowledge"
+runtime.knowledge_deployment.retrieval -> runtime.knowledge_deployment.db: "private SQL / pgvector queries"
+runtime.knowledge_deployment.db -> runtime.knowledge_deployment.retrieval: "matching knowledge rows"
+web_release -> runtime.chat_deployment.web: "deploy app release"
+runtime.chat_deployment.web -> runtime.knowledge_deployment.retrieval: "HTTP /v1 request; JSON response\n(no direct database access)"

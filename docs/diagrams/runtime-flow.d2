@@ -1,0 +1,62 @@
+direction: down
+
+user: "User question" {style.fill: "#fff4d6"}
+web: "web_app chat interface + orchestrator\nowns conversation and user context" {
+  style.fill: "#f1e5ff"
+}
+
+exact_request: "Deterministic request\nknown issuer + designation / document ID\nno generative LLM" {
+  style.fill: "#e7f3ff"
+}
+query_llm: "Optional question LLM\ninterpret intent / rewrite query\n(runs outside retrieval)" {
+  style.fill: "#f1e5ff"
+}
+search_request: "Free-text search request\nraw or LLM-refined query\nweb_app supplies jurisdiction scope" {
+  style.fill: "#e7f3ff"
+}
+
+retrieval: "document-index-builder retrieval service\nHTTP API /v1; returns data, not chat answers" {
+  style.fill: "#dceeff"
+  exact: "Exact lookup endpoints\nissuer + designation / ID" {
+    style.fill: "#dceeff"
+  }
+  search: "Text + semantic search endpoint\nGET /v1/documents/search" {
+    style.fill: "#dceeff"
+  }
+}
+
+embed: "Pinned local e5 embedding model\nused for free-text query search\nnot a generative LLM" {
+  style.fill: "#fff4d6"
+}
+db: "Consumer PostgreSQL + pgvector\nimported knowledge; rights/jurisdiction gated" {
+  shape: cylinder
+  style.fill: "#e4f4df"
+}
+
+answer_llm: "Optional answer LLM (RAG)\noriginal question + retrieved evidence\nsynthesize answer / cite sources" {
+  style.fill: "#f1e5ff"
+}
+direct_response: "No-LLM response path\nshow / format deterministic results" {
+  style.fill: "#e7f3ff"
+}
+
+user -> web: "question"
+web -> exact_request: "explicit identifier / structured lookup"
+exact_request -> retrieval.exact: "HTTP GET with exact parameters"
+web -> query_llm: "optional question interpretation"
+query_llm -> search_request: "refined query / intent"
+web -> search_request: "or send original free text"
+search_request -> retrieval.search: "HTTP GET /v1/documents/search"
+retrieval.search -> embed: "embed q"
+embed -> retrieval.search: "query vector"
+retrieval.exact -> db: "exact relational lookup\n(no query embedding)"
+retrieval.search -> db: "text + vector search\nrights / jurisdiction filters"
+db -> retrieval.exact: "matching record"
+db -> retrieval.search: "ranked documents / works"
+retrieval.exact -> web: "HTTP JSON result"
+retrieval.search -> web: "HTTP JSON candidates / permitted data"
+web -> direct_response: "when no answer LLM is used"
+web -> answer_llm: "optional: question + selected evidence"
+direct_response -> web: "deterministic response"
+answer_llm -> web: "grounded answer + citations"
+web -> user: "response"

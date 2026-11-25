@@ -1,0 +1,26 @@
+direction: down
+
+source: "Software source\nGitHub: normly/document-index-builder\ncore pipeline + builder dependencies" {
+  shape: document
+  style.fill: "#dceeff"
+}
+build: "Docker Buildx Bake\ntarget: builder\nDockerfile: docker/python.Dockerfile" {
+  style.fill: "#dceeff"
+}
+e5: "Hugging Face Hub (external)\nintfloat/multilingual-e5-large\nrevision 3d7cfbdacd47fdda877c5cd8a79fbcc4f2a574f3" {
+  shape: document
+  style.fill: "#fff4d6"
+}
+docling: "Hugging Face Hub (external)\ndocling-layout-heron @ 8f39ad3c…\ndocling-layout-heron-onnx @ 40bde044…\ndocling-models / TableFormer @ fc0f2d45…\nfull pins: core/model_artifacts.py" {
+  shape: document
+  style.fill: "#fff4d6"
+}
+image: "Builder application artifact\nOCI image: ghcr.io/normly/document-index-builder/builder\nversion / immutable digest" {
+  shape: document
+  style.fill: "#ffeadc"
+}
+
+source -> build: "locked software source"
+build -> image: "package application + pinned model files\nfor offline runtime"
+e5 -> build: "download pinned snapshot"
+docling -> build: "download pinned snapshots"
