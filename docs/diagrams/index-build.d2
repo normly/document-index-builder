@@ -1,0 +1,28 @@
+direction: down
+
+builder_image: "Builder application artifact\nOCI image: ghcr.io/normly/document-index-builder/builder\npreviously built; Docling + pinned models included" {shape: document; style.fill: "#dceeff"}
+builder_run: "Run builder application artifact\ncontainer executes build command\nreads inputs; writes build database" {style.fill: "#dceeff"}
+pdf: "Source PDFs\nGitHub: normly/web-app-raw-data\nprivate pinned submodule" {shape: document}
+extract: "Docling PDF extraction\nsource adapter normalizes" {style.fill: "#dceeff"}
+rights: "Rights + identity\nreview gates" {style.fill: "#fff4d6"}
+review: "Review / refusal\nno completed release" {style.fill: "#ffe3e3"}
+records: "Document + work\nmetadata, lineage, edges\nrights per jurisdiction" {style.fill: "#e4f4df"}
+segments: "Permitted full text\nsections → segments" {style.fill: "#e4f4df"}
+vectors: "Pinned e5 embeddings\nsegment + document\n1024 dimensions" {style.fill: "#e4f4df"}
+db: "Build-only database\nPostgreSQL 16 + pgvector\nCompose build service" {shape: cylinder}
+release: "Output artifact (not a DB dump)\nParquet parts + manifest.json\n+ Ed25519 manifest signature" {shape: document; style.fill: "#ffeadc"}
+
+builder_image -> builder_run: "run this artifact"
+pdf -> builder_run: "read-only /inputs mount"
+builder_run -> extract: "invoke PDF pipeline"
+extract -> rights: "normalized record"
+rights -> review: "missing rights / ambiguity"
+rights -> records: "allowed"
+records -> segments: "if full-text indexing allowed"
+records -> vectors: "designation + title"
+segments -> vectors: "segment text"
+records -> db
+segments -> db
+vectors -> db
+builder_run -> db: "repository writes"
+db -> release: "export + verify"

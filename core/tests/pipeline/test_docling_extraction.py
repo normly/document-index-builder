@@ -226,7 +226,7 @@ def test_a_pipeline_failure_is_not_a_document_extraction_error():
     assert not issubclass(DocumentExtractionError, PipelineInitializationError)
 
 
-def test_extract_document_raises_on_a_partial_success_conversion(monkeypatch):
+def test_extract_document_raises_on_a_partial_success_conversion():
     """Docling's convert() only raises on genuine failure -- PARTIAL_SUCCESS
     (some pages failed layout/table inference) returns normally with a
     truncated document. extract_document() must treat that as a failure
@@ -237,13 +237,16 @@ def test_extract_document_raises_on_a_partial_success_conversion(monkeypatch):
     test above already covers the ConversionError/raises_on_error path with
     a real file.
     """
-    monkeypatch.delenv("NORMLY_DOCLING_ARTIFACTS_PATH", raising=False)
-    docling_extraction._converters.clear()
-
     fake_result = MagicMock()
     fake_result.status = ConversionStatus.PARTIAL_SUCCESS
     fake_result.errors = ["page 3: layout model failed"]
+    fake_converter = MagicMock()
+    fake_converter.convert.return_value = fake_result
 
-    with patch.object(DocumentConverter, "convert", return_value=fake_result):
+    # This test covers result-status handling only. Stub converter lookup so
+    # eager pipeline initialization cannot require local model artifacts.
+    with patch.object(
+        docling_extraction, "_get_converter", return_value=fake_converter
+    ):
         with pytest.raises(DocumentExtractionError, match="partial"):
             extract_document(FIXTURE_DIR / "dguv_sample_vorschrift.pdf")

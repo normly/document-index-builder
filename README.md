@@ -116,10 +116,68 @@ RUN_REAL_PDF_TESTS=1 uv run --group dev --all-packages --all-extras \
 Draft annotations fail the opt-in validation guard; tests skip private inputs
 when the environment variable is unset.
 
+## Build a signed knowledge release
+
+This is a **data build**, not an image build or PDF inspection. It runs the
+already-built Builder image over authorized PDFs, writes intermediate knowledge
+to a dedicated PostgreSQL/pgvector build database, and creates a signed Parquet
+release. It does not publish the release or populate the runtime database.
+
+Only process registered sources with an applicable rights classification. The
+private `web-app-raw-data` submodule contains the project PDFs; see
+[Where source documents live](#where-source-documents-live) for its origin and
+access requirements. Public CI uses synthetic inputs only. Production knowledge
+builds and release publication belong on authorized STACKIT infrastructure;
+local processing is limited to the documented, explicitly authorized exception.
+Never commit PDFs, extracted text, keys, or release data.
+
+1. Initialize the private submodule as described in
+   [Where source documents live](#where-source-documents-live).
+2. Prepare the Builder image. Use **Start here: inspect one PDF → Build the
+   builder image** above (the same Builder image is used for the data build).
+3. Prepare a private build configuration and environment:
+
+   ```sh
+   mkdir -p .local
+   cp -n builds/example.json .local/build.json
+   cp -n .env.example .env
+   ```
+
+   In `.local/build.json`, set a unique `build_id` and `output_version`, and
+   select the registered adapter and its input directory under `/inputs`. The
+   example expects `/inputs/baua`; therefore the host input directory in the
+   command below should contain `baua/`, or adjust the config for the directory
+   you are authorized to process. Keep credentials and signing keys out of JSON.
+
+   Set `NORMLY_BUILD_POSTGRES_PASSWORD` in the ignored `.env` or another private
+   environment source. Use a dedicated URL-safe password. Provide an existing
+   Ed25519 private signing key by path; do not copy it into the repository.
+   Each changed experiment requires its own empty build database.
+
+4. Run the build with a unique Compose project name and a fresh output version:
+
+   ```sh
+   COMPOSE_PROJECT_NAME=document-index-experiment-01 \
+     bash scripts/build-knowledge .local/build.json \
+       '/path/to/authorized/inputs' .local/releases '/path/to/private-key.pem'
+   ```
+
+   The wrapper starts the dedicated PostgreSQL/pgvector service, mounts the
+   input directory read-only at `/inputs`, runs the Builder container, and
+   writes the result under `.local/releases/<output_version>/`. A successful
+   build exports and verifies the signed manifest and parts. The release is not
+   uploaded or published automatically.
+
+For build identity, review gates, verification, retry rules, and release
+promotion requirements, continue to [Building knowledge](docs/guide/building-knowledge.md)
+and [Signed knowledge releases](docs/guide/knowledge-releases.md). The
+[architecture guide](docs/architecture.md) explains the build/runtime boundary
+and the Parquet artifact format.
+
 ## Next steps
 
-- **Build a knowledge release:** follow [Building knowledge](docs/guide/building-knowledge.md).
-  Unlike PDF inspection, this needs a dedicated database and a signing key.
+- **Build a knowledge release:** follow the [build steps above](#build-a-signed-knowledge-release)
+  and the detailed [Building knowledge guide](docs/guide/building-knowledge.md).
 - **Run search over prepared knowledge:** follow [Self-hosting](docs/guide/self-hosting.md).
   Retrieval imports a separately trusted, signed release; it does not ingest PDFs.
 - **Check an authorized real PDF end to end locally:** follow the [local
@@ -165,6 +223,7 @@ file directly; no global skill installation is required.
 
 ## Reference
 
+- [Architecture: build, artifact production, runtime deployment and request flow](docs/architecture.md)
 - [Retrieval API semantics](docs/guide/retrieval-api.md) / [OpenAPI](api/openapi.yaml)
 - [Signed knowledge exchange](docs/guide/knowledge-releases.md)
 - [Extraction ownership and coordinated web_app cutover](docs/guide/extraction-map.md)
