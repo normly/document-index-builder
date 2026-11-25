@@ -112,6 +112,8 @@ artifact tracks:
 | Builder and retrieval images | Software source in this `normly/document-index-builder` repository, built from `docker/python.Dockerfile` targets and `docker-bake.hcl`; verified images are published at `ghcr.io/normly/document-index-builder/{builder,retrieval}` | OCI container images. The builder image contains ingestion/Docling; retrieval contains the FastAPI service and pinned query model, but no Docling or source PDFs. Software CI uses synthetic data only. See [software release process](guide/releasing.md). |
 | Knowledge release | Produced by the authorized builder from PDFs sourced from the private [`normly/web-app-raw-data`](https://github.com/normly/web-app-raw-data) repository/submodule, then reviewed and promoted separately | Immutable Parquet table parts + `manifest.json` + Ed25519 signature, published to the authorized STACKIT Object Storage route. This is a data artifact, not an image or database dump. |
 
+![Retrieval API image build](diagrams/retrieval-build.svg)
+
 The real-data builder run is a separate authorized operation from the software
 image workflow. It reads authorized PDFs, writes to its dedicated PostgreSQL 16
 + pgvector build database, exports a signed release, and does not publish that
@@ -248,6 +250,7 @@ sketches from the repository root:
 ```sh
 d2 --sketch docs/diagrams/index-build.d2 docs/diagrams/index-build.svg
 d2 --sketch docs/diagrams/index-builder-build.d2 docs/diagrams/index-builder-build.svg
+d2 --sketch docs/diagrams/retrieval-build.d2 docs/diagrams/retrieval-build.svg
 d2 --sketch docs/diagrams/runtime-deployment.d2 docs/diagrams/runtime-deployment.svg
 d2 --sketch docs/diagrams/runtime-flow.d2 docs/diagrams/runtime-flow.svg
 ```
