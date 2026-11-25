@@ -1,40 +1,59 @@
 direction: down
 
-release_store: "STACKIT Object Storage\nselected immutable knowledge release\nParquet + manifest + signature" {
-  shape: document
-  style.fill: "#ffeadc"
-}
-web_release: "web_app project\nits own application release pipeline\nchat / accounts / user state" {
-  style.fill: "#f1e5ff"
+artifacts: "Application image artifacts" {
+  direction: right
+  retrieval_image: "Retrieval OCI image artifact\nGHCR: normly/document-index-builder/retrieval\npinned version / digest" {
+    shape: document
+    style.fill: "#ffeadc"
+  }
+  web_release: "web_app release artifact\nseparate application pipeline" {
+    shape: document
+    style.fill: "#f1e5ff"
+  }
 }
 
-runtime: "STACKIT — private runtime" {
-  chat_deployment: "web_app deployment\nHTTP consumer of retrieval" {
-    web: "Chat UI + orchestration\naccounts + user state\nseparate web_app release" {
-      style.fill: "#f1e5ff"
+stackit: "STACKIT — operational environment" {
+  direction: right
+
+  provisioned: "Separately provisioned inputs" {
+    direction: down
+    release_store: "Authorized Object Storage\nimmutable Parquet release\nmanifest + signature" {
+      shape: document
+      style.fill: "#ffeadc"
     }
-  }
-  knowledge_deployment: "document-index-builder deployment" {
-    retrieval: "Running retrieval API service\nprivate HTTP :8000\nserves imported knowledge" {
-      style.fill: "#dceeff"
-    }
-    db: "Consumer PostgreSQL 16\n+ pgvector + persistent volume" {
-      shape: cylinder
-      style.fill: "#e4f4df"
-    }
-    bootstrap: "Bootstrap / initializer\nverify + transactional import" {
-      style.fill: "#dceeff"
-    }
-    trust: "Separately provisioned\ntrusted public-key PEM" {
+    trusted_key: "Trusted public-key PEM\nprovisioned separately\nnot baked into either image" {
+      shape: document
       style.fill: "#fff4d6"
     }
   }
+
+  deployment: "Private application deployment boundary" {
+    direction: right
+    chat_deployment: "web_app deployment\nHTTP consumer" {
+      web: "Chat UI + orchestration\naccounts + user state" {
+        style.fill: "#f1e5ff"
+      }
+    }
+    knowledge_deployment: "document-index-builder deployment\nbootstrap + Retrieval use same image" {
+      direction: right
+      bootstrap: "One-shot bootstrap\nverify release + import\nbefore API readiness" {
+        style.fill: "#dceeff"
+      }
+      db: "Consumer PostgreSQL 16\n+ pgvector + persistent volume" {
+        shape: cylinder
+        style.fill: "#e4f4df"
+      }
+      retrieval: "Running Retrieval API\nprivate HTTP :8000" {
+        style.fill: "#dceeff"
+      }
+    }
+  }
 }
 
-release_store -> runtime.knowledge_deployment.bootstrap: "fetch selected version"
-runtime.knowledge_deployment.trust -> runtime.knowledge_deployment.bootstrap: "verify signature"
-runtime.knowledge_deployment.bootstrap -> runtime.knowledge_deployment.db: "import knowledge"
-runtime.knowledge_deployment.retrieval -> runtime.knowledge_deployment.db: "private SQL / pgvector queries"
-runtime.knowledge_deployment.db -> runtime.knowledge_deployment.retrieval: "matching knowledge rows"
-web_release -> runtime.chat_deployment.web: "deploy app release"
-runtime.chat_deployment.web -> runtime.knowledge_deployment.retrieval: "HTTP /v1 request; JSON response\n(no direct database access)"
+artifacts.retrieval_image -> stackit.deployment.knowledge_deployment: "deploy pinned image digest"
+artifacts.web_release -> stackit.deployment.chat_deployment.web: "deploy application release"
+stackit.provisioned.release_store -> stackit.deployment.knowledge_deployment.bootstrap: "fetch selected version"
+stackit.provisioned.trusted_key -> stackit.deployment.knowledge_deployment.bootstrap: "mount read-only for verification"
+stackit.deployment.knowledge_deployment.bootstrap -> stackit.deployment.knowledge_deployment.db: "transactional import"
+stackit.deployment.knowledge_deployment.retrieval -> stackit.deployment.knowledge_deployment.db: "private SQL / pgvector query + results"
+stackit.deployment.chat_deployment.web -> stackit.deployment.knowledge_deployment.retrieval: "private HTTP /v1 request + JSON response\nno direct database access"

@@ -1,234 +1,50 @@
 # document-index-builder
 
-Turn authorized source documents into a searchable knowledge base. Start small by converting single PDFs per standard family to Markdown so you can check how headings, text and tables are extracted. For repeatable adapter checks, keep manually reviewed expectations in `web-app-raw-data/raw_data_test/<family>/extraction-test-annotations.json`, using the shared template and instructions in that private submodule. One family-neutral local test harness discovers those files and selects the registered adapter named by each case.
+Build searchable knowledge from authorized source PDFs, then serve it through a
+separate retrieval API.
 
-When extraction settings work, build a signed knowledge release from pinned
-builder software and source inputs. The builder stores parsed knowledge in its
-dedicated PostgreSQL/pgvector build database, then exports the release—not a
-database dump. The release contains Parquet files for approved knowledge tables,
-plus a manifest and signature. On deployment, retrieval verifies and imports the
-release into its own, separate PostgreSQL/pgvector database; that is the database
-the API serves from. Build-only state is not included in the release.
+## Architecture at a glance
 
-The **Builder** image ingests documents and creates releases. The **Retrieval**
-image serves the search API from the separately populated consumer database.
+- **Source documents:** The project corpus is maintained in the private
+  [`normly/web-app-raw-data`](https://github.com/normly/web-app-raw-data)
+  repository and pinned here as the `web-app-raw-data` submodule. The corpus is
+  input data; it is not part of this repository's software images.
+- **Build:** The Builder OCI image from this repository processes authorized
+  PDFs and writes relational knowledge and 1024-dimensional vectors to its
+  dedicated PostgreSQL/pgvector build database. It exports an immutable signed
+  Parquet release—not a PostgreSQL dump or database image.
+- **Retrieval:** A separate Retrieval OCI image from this repository verifies
+  and imports that release into its own PostgreSQL/pgvector consumer database,
+  then serves the versioned HTTP API.
+- **Application boundary:** `web_app` owns accounts, chat and user state. It
+  consumes retrieval over private HTTP; it does not connect directly to the
+  knowledge database.
 
-Not part of the scope of this repo: `web_app` owns accounts, chat and user state; it communicates with retrieval over HTTP.
+The [architecture guide](docs/architecture.md) has the component views, artifact
+formats, source provenance, runtime data flow and HTTP API documentation.
 
-## Start here: inspect one PDF
+Only process registered sources with the applicable rights classification.
+Public CI uses synthetic inputs only. Operational data and publication belong
+on authorized STACKIT infrastructure. Never commit PDFs, extracted text,
+knowledge releases or secrets.
 
-### What you need
+## Workflow guides
 
-- Linux with Docker Engine, Docker Compose and Docker buildx available.
-- A PDF you are permitted to process, on an approved storage location.
-- VS Code if you want the editor tasks and Markdown preview (optional).
+Use the workflow skill as the canonical source for task commands and procedures.
+The linked guides provide supporting technical and policy detail; this README
+intentionally contains no executable command examples.
 
-You do **not** need Python installed on your machine, a database or a signing
-key to inspect a PDF. The first image build downloads software and pinned model
-weights; subsequent parsing runs offline. Allow time and disk space for that
-initial build.
+| Workflow | Skill | Guide |
+|---|---|---|
+| Build or rebuild the Builder or Retrieval image | [building-document-index-images](.agents/skills/building-document-index-images/SKILL.md) | [Independent software releases](docs/guide/releasing.md) |
+| Inspect one PDF or tune extraction | [inspecting-document-index-pdfs](.agents/skills/inspecting-document-index-pdfs/SKILL.md) | [Inspecting PDFs](docs/guide/inspecting-pdfs.md) |
+| Build a signed knowledge release | [building-document-index-releases](.agents/skills/building-document-index-releases/SKILL.md) | [Building knowledge](docs/guide/building-knowledge.md), [signed releases](docs/guide/knowledge-releases.md) |
+| Run retrieval, import/update knowledge or check readiness | [running-document-index-retrieval](.agents/skills/running-document-index-retrieval/SKILL.md) | [Self-hosting](docs/guide/self-hosting.md), [retrieval API](docs/guide/retrieval-api.md) |
+| Verify adapters or perform local real-PDF acceptance | — | [Verification guide](docs/guide/verification.md) |
 
-Run the following from the repository root.
-
-### 1. Build the builder image
-
-```sh
-REGISTRY= PUSH=0 docker buildx bake -f docker-bake.hcl --load builder
-```
-
-This prepares the local software image. It does not process documents or start
-a database.
-
-### 2. Prepare the PDF's inspection settings
-
-```sh
-mkdir -p .local
-cp -n configs/docling.example.json .local/inspection-config.json
-sha256sum -- '/path/with spaces/example.pdf'
-```
-
-Replace the example PDF path with your own. Open `.local/inspection-config.json`
-and set:
-
-- `input_sha256` to the hash printed by `sha256sum`.
-- `source` to the matching registered source: `baua`, `dguv` or `eur-lex`.
-- `rights` to the documented jurisdiction and legal basis permitting this PDF
-  to be processed. The example deliberately sets `may_process` to `false`;
-  change it only if that classification permits processing.
-
-Choosing a source does not grant permission. If your PDF has no applicable
-registration or rights classification, stop rather than bypassing the checks.
-Existing local configuration is preserved by the copy command.
-
-### 3. Inspect and open the result
-
-For a BAuA PDF, with `source` set to `baua` in the configuration:
-
-```sh
-bash scripts/inspect-pdf '/path/with spaces/example.pdf' \
-  .local/inspection-config.json baua .local/inspection/example-01
-```
-
-Use the matching source name for other registered sources. Choose a **new output
-directory** for each experiment; do not reuse or create it while inspection runs.
-
-The output contains:
-
-| File | What it is for |
-|---|---|
-| `document.md` | Read the extracted content and preview it as Markdown. |
-| `document.json` | Inspect Docling's structured document representation. |
-| `configuration.json` | See the effective settings used for this run. |
-| `report.json` | Check versions, input hash, elapsed time and warnings. |
-
-In VS Code, open `document.md` and select **Markdown: Open Preview to the Side**.
-See the [PDF inspection guide](docs/guide/inspecting-pdfs.md) for supported parser
-settings and troubleshooting.
-
-### Prefer VS Code tasks?
-
-Use **Terminal → Run Task**:
-
-| Task | When to use it |
-|---|---|
-| **Document Index: Build builder image** | Prepare or rebuild the builder. |
-| **Document Index: Inspect PDF** | Supply a PDF, configuration, source and fresh output path. |
-| **Document Index: Build knowledge release** | Build a complete release after preparing authorized inputs, configuration, dedicated build storage and a signing key. |
-
-## Validate adapters
-
-The private `web-app-raw-data` submodule contains the JSON template, per-family
-annotation records, and the detailed [real-PDF test guide](web-app-raw-data/EXTRACTION_TESTS.md).
-The generic test harness checks selected Docling properties and the adapter's
-annotated records, sections, and anchor assignments. It is local-only and
-requires human-verified annotations; ordinary CI remains synthetic-only. After
-reviewing a case and preparing pinned Docling artifacts offline, run from the
-repository root:
-
-```sh
-NORMLY_DOCLING_ARTIFACTS_PATH="$PWD/.local/models/docling" \
-RUN_REAL_PDF_TESTS=1 uv run --group dev --all-packages --all-extras \
-  python -m pytest \
-  core/tests/pipeline/test_real_pdf_annotations.py \
-  core/tests/pipeline/test_real_pdf_extraction.py -q
-```
-
-Draft annotations fail the opt-in validation guard; tests skip private inputs
-when the environment variable is unset.
-
-## Build a signed knowledge release
-
-This is a **data build**, not an image build or PDF inspection. It runs the
-already-built Builder image over authorized PDFs, writes intermediate knowledge
-to a dedicated PostgreSQL/pgvector build database, and creates a signed Parquet
-release. It does not publish the release or populate the runtime database.
-
-Only process registered sources with an applicable rights classification. The
-private `web-app-raw-data` submodule contains the project PDFs; see
-[Where source documents live](#where-source-documents-live) for its origin and
-access requirements. Public CI uses synthetic inputs only. Production knowledge
-builds and release publication belong on authorized STACKIT infrastructure;
-local processing is limited to the documented, explicitly authorized exception.
-Never commit PDFs, extracted text, keys, or release data.
-
-1. Initialize the private submodule as described in
-   [Where source documents live](#where-source-documents-live).
-2. Prepare the Builder image. Use **Start here: inspect one PDF → Build the
-   builder image** above (the same Builder image is used for the data build).
-3. Prepare a private build configuration and environment:
-
-   ```sh
-   mkdir -p .local
-   cp -n builds/example.json .local/build.json
-   cp -n .env.example .env
-   ```
-
-   In `.local/build.json`, set a unique `build_id` and `output_version`, and
-   select the registered adapter and its input directory under `/inputs`. The
-   example expects `/inputs/baua`; therefore the host input directory in the
-   command below should contain `baua/`, or adjust the config for the directory
-   you are authorized to process. Keep credentials and signing keys out of JSON.
-
-   Set `NORMLY_BUILD_POSTGRES_PASSWORD` in the ignored `.env` or another private
-   environment source. Use a dedicated URL-safe password. Provide an existing
-   Ed25519 private signing key by path; do not copy it into the repository.
-   Each changed experiment requires its own empty build database.
-
-4. Run the build with a unique Compose project name and a fresh output version:
-
-   ```sh
-   COMPOSE_PROJECT_NAME=document-index-experiment-01 \
-     bash scripts/build-knowledge .local/build.json \
-       '/path/to/authorized/inputs' .local/releases '/path/to/private-key.pem'
-   ```
-
-   The wrapper starts the dedicated PostgreSQL/pgvector service, mounts the
-   input directory read-only at `/inputs`, runs the Builder container, and
-   writes the result under `.local/releases/<output_version>/`. A successful
-   build exports and verifies the signed manifest and parts. The release is not
-   uploaded or published automatically.
-
-For build identity, review gates, verification, retry rules, and release
-promotion requirements, continue to [Building knowledge](docs/guide/building-knowledge.md)
-and [Signed knowledge releases](docs/guide/knowledge-releases.md). The
-[architecture guide](docs/architecture.md) explains the build/runtime boundary
-and the Parquet artifact format.
-
-## Next steps
-
-- **Build a knowledge release:** follow the [build steps above](#build-a-signed-knowledge-release)
-  and the detailed [Building knowledge guide](docs/guide/building-knowledge.md).
-- **Run search over prepared knowledge:** follow [Self-hosting](docs/guide/self-hosting.md).
-  Retrieval imports a separately trusted, signed release; it does not ingest PDFs.
-- **Check an authorized real PDF end to end locally:** follow the [local
-  ingestion-to-retrieval acceptance procedure](docs/guide/verification.md#local-real-pdf-ingestion-to-retrieval-acceptance).
-  This is separate from the local Docling/adapter tests and from synthetic CI.
-- **Develop or test the software:** read [CONTRIBUTING.md](CONTRIBUTING.md),
-  [REVIEW.md](REVIEW.md) and [verification and releases](docs/guide/releasing.md).
-
-### Where source documents live
-
-The source corpus is maintained in the private
-[`web-app-raw-data` repository](https://github.com/normly/web-app-raw-data),
-pinned here as the `web-app-raw-data` submodule. Initialize it after cloning with
-`git submodule update --init web-app-raw-data` (or clone with
-`--recurse-submodules`). For an authorized local build, pass the relevant source
-directory to `scripts/build-knowledge`, which mounts it read-only at `/inputs`.
-The corpus is intentionally excluded from this repository's Docker build context
-and CI; its presence as a submodule does not authorize processing or publishing.
-
-Only process sources you are authorized to use. Extracted text and JSON contain
-source content: keep them on permitted storage, normally in ignored `.local/`
-directories, and never commit them or upload them to public issues or CI.
-Operational data and publication belong on STACKIT; the limited local-testing
-exception is not permission to process arbitrary sources. See [AGENTS.md](AGENTS.md)
-for the repository's safety and rights rules.
-
-## For AI coding assistants
-
-Repository skills are task-specific instructions, not a prerequisite for humans
-following the quick start above. Read the matching `SKILL.md` before performing
-a workflow:
-
-| Task | Skill |
-|---|---|
-| Build Docker images | [building-document-index-images](.agents/skills/building-document-index-images/SKILL.md) |
-| Inspect a PDF or tune parsing | [inspecting-document-index-pdfs](.agents/skills/inspecting-document-index-pdfs/SKILL.md) |
-| Build a signed knowledge release | [building-document-index-releases](.agents/skills/building-document-index-releases/SKILL.md) |
-| Run retrieval, update knowledge or verify locally | [running-document-index-retrieval](.agents/skills/running-document-index-retrieval/SKILL.md) |
-
-[AGENTS.md](AGENTS.md) provides task routing and mandatory constraints. If an
-assistant does not discover `.agents/skills/` automatically, open the linked
-file directly; no global skill installation is required.
-
-## Reference
-
-- [Architecture: build, artifact production, runtime deployment and request flow](docs/architecture.md)
-- [Retrieval API semantics](docs/guide/retrieval-api.md) / [OpenAPI](api/openapi.yaml)
-- [Signed knowledge exchange](docs/guide/knowledge-releases.md)
-- [Extraction ownership and coordinated web_app cutover](docs/guide/extraction-map.md)
-- [Verification procedure](docs/guide/verification.md)
-- [Current verification record](docs/verification-record.md)
+For software development and review, see [CONTRIBUTING.md](CONTRIBUTING.md),
+[REVIEW.md](REVIEW.md) and the [verification guide](docs/guide/verification.md).
+Repository-wide safety and engineering rules are in [AGENTS.md](AGENTS.md).
 
 ## License
 

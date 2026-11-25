@@ -1,0 +1,21 @@
+direction: down
+
+source: "Software source artifact\nGitHub: normly/document-index-builder\napi/ + core/ + locked dependencies\nOpenAPI: api/openapi.yaml" {
+  shape: document
+  style.fill: "#dceeff"
+}
+model: "External model artifact\nHugging Face: intfloat/multilingual-e5-large\nrevision 3d7cfbdacd47fdda877c5cd8a79fbcc4f2a574f3" {
+  shape: document
+  style.fill: "#fff4d6"
+}
+build: "Docker Buildx Bake\ntarget: retrieval\nDockerfile: docker/python.Dockerfile" {
+  style.fill: "#dceeff"
+}
+image: "Retrieval API service artifact\nOCI image: ghcr.io/normly/document-index-builder/retrieval\nversion / immutable digest" {
+  shape: document
+  style.fill: "#ffeadc"
+}
+
+source -> build: "locked application source"
+model -> build: "fetch pinned model snapshot"
+build -> image: "package FastAPI + core + model\n(no Docling or knowledge database)"

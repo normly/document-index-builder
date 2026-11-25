@@ -1,62 +1,49 @@
 direction: down
 
-user: "User question" {style.fill: "#fff4d6"}
-web: "web_app chat interface + orchestrator\nowns conversation and user context" {
-  style.fill: "#f1e5ff"
+user_question: "User question" {style.fill: "#fff4d6"}
+
+web_query: "web_app — query handling" {
+  direction: right
+  question: "Question + trusted\njurisdiction context" {style.fill: "#f1e5ff"}
+  exact_request: "Exact / structured lookup\nissuer + designation or ID\nno generative LLM" {style.fill: "#e7f3ff"}
+  query_llm: "Optional question LLM\ninterpret intent / rewrite query" {style.fill: "#f1e5ff"}
+  search_request: "Free-text search request\nraw question or refined query" {style.fill: "#e7f3ff"}
 }
 
-exact_request: "Deterministic request\nknown issuer + designation / document ID\nno generative LLM" {
-  style.fill: "#e7f3ff"
-}
-query_llm: "Optional question LLM\ninterpret intent / rewrite query\n(runs outside retrieval)" {
-  style.fill: "#f1e5ff"
-}
-search_request: "Free-text search request\nraw or LLM-refined query\nweb_app supplies jurisdiction scope" {
-  style.fill: "#e7f3ff"
-}
-
-retrieval: "document-index-builder retrieval service\nHTTP API /v1; returns data, not chat answers" {
-  style.fill: "#dceeff"
-  exact: "Exact lookup endpoints\nissuer + designation / ID" {
-    style.fill: "#dceeff"
+retrieval: "document-index-builder retrieval service — HTTP /v1" {
+  direction: right
+  exact_endpoint: "Exact lookup endpoint\nno query embedding" {style.fill: "#dceeff"}
+  search_endpoint: "Text + semantic search\nuses pinned e5 query embeddings\n(not a generative LLM)" {style.fill: "#dceeff"}
+  db: "Consumer PostgreSQL\n+ pgvector\nrights / jurisdiction filters" {
+    shape: cylinder
+    style.fill: "#e4f4df"
   }
-  search: "Text + semantic search endpoint\nGET /v1/documents/search" {
-    style.fill: "#dceeff"
-  }
+  results: "Rights-filtered\nJSON retrieval results" {style.fill: "#dceeff"}
 }
 
-embed: "Pinned local e5 embedding model\nused for free-text query search\nnot a generative LLM" {
-  style.fill: "#fff4d6"
-}
-db: "Consumer PostgreSQL + pgvector\nimported knowledge; rights/jurisdiction gated" {
-  shape: cylinder
-  style.fill: "#e4f4df"
-}
-
-answer_llm: "Optional answer LLM (RAG)\noriginal question + retrieved evidence\nsynthesize answer / cite sources" {
-  style.fill: "#f1e5ff"
-}
-direct_response: "No-LLM response path\nshow / format deterministic results" {
-  style.fill: "#e7f3ff"
+web_answer: "web_app — response handling" {
+  direction: right
+  result_context: "Retrieved documents / works\npermitted data" {style.fill: "#e7f3ff"}
+  direct: "No-LLM path\ndisplay / deterministically format" {style.fill: "#e7f3ff"}
+  answer_llm: "Optional answer LLM (RAG)\noriginal question + retrieved evidence\ngrounded answer / citations" {style.fill: "#f1e5ff"}
+  response: "Chat response" {style.fill: "#f1e5ff"}
 }
 
-user -> web: "question"
-web -> exact_request: "explicit identifier / structured lookup"
-exact_request -> retrieval.exact: "HTTP GET with exact parameters"
-web -> query_llm: "optional question interpretation"
-query_llm -> search_request: "refined query / intent"
-web -> search_request: "or send original free text"
-search_request -> retrieval.search: "HTTP GET /v1/documents/search"
-retrieval.search -> embed: "embed q"
-embed -> retrieval.search: "query vector"
-retrieval.exact -> db: "exact relational lookup\n(no query embedding)"
-retrieval.search -> db: "text + vector search\nrights / jurisdiction filters"
-db -> retrieval.exact: "matching record"
-db -> retrieval.search: "ranked documents / works"
-retrieval.exact -> web: "HTTP JSON result"
-retrieval.search -> web: "HTTP JSON candidates / permitted data"
-web -> direct_response: "when no answer LLM is used"
-web -> answer_llm: "optional: question + selected evidence"
-direct_response -> web: "deterministic response"
-answer_llm -> web: "grounded answer + citations"
-web -> user: "response"
+user_response: "Response to user" {style.fill: "#fff4d6"}
+
+user_question -> web_query.question
+web_query.question -> web_query.exact_request: "known document identity"
+web_query.question -> web_query.query_llm: "optional interpretation"
+web_query.question -> web_query.search_request: "or send raw free text"
+web_query.query_llm -> web_query.search_request: "refined search query"
+web_query.exact_request -> retrieval.exact_endpoint: "HTTP GET exact lookup"
+web_query.search_request -> retrieval.search_endpoint: "HTTP GET /v1/documents/search"
+retrieval.exact_endpoint -> retrieval.db: "relational lookup"
+retrieval.search_endpoint -> retrieval.db: "text + vector search"
+retrieval.db -> retrieval.results: "matching records / works"
+retrieval.results -> web_answer.result_context: "HTTP JSON response"
+web_answer.result_context -> web_answer.direct: "when no answer LLM is used"
+web_answer.result_context -> web_answer.answer_llm: "optional synthesis"
+web_answer.direct -> web_answer.response
+web_answer.answer_llm -> web_answer.response
+web_answer.response -> user_response
